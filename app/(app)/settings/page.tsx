@@ -1,12 +1,13 @@
 import * as React from "react";
 import {
-  AlertTriangle, CheckCircle2, CircleSlash, Database, Facebook, KeyRound, Link2, RefreshCw, Server, ShieldCheck, XCircle,
+  AlertTriangle, CheckCircle2, CircleSlash, Database, Facebook, Gauge, KeyRound, Link2, RefreshCw, Server, ShieldCheck, XCircle,
 } from "lucide-react";
 import { getSession, resolveAccounts } from "@/lib/data";
-import { metaConfig, SCOPES } from "@/lib/meta";
+import { graphUsage, metaConfig, rateLimitCooldownMs, SCOPES } from "@/lib/meta";
 import { Badge, Callout, Panel, PanelHeader } from "@/components/ui/primitives";
 import { CopyButton } from "@/components/panels/copy-button";
 import { relative } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,16 @@ export default async function SettingsPage({
   const config = metaConfig();
   const { live, reason, accounts } = await resolveAccounts(session);
   const demo = !live;
+  const usage = graphUsage();
+  const cooldown = rateLimitCooldownMs();
+  const quotaBars = [
+    { label: "App calls", value: usage.app?.callCount ?? 0, hint: "Share of the 200/hour/user app pool" },
+    { label: "App CPU time", value: usage.app?.totalCputime ?? 0, hint: "Processing time against the same pool" },
+    { label: "App total time", value: usage.app?.totalTime ?? 0, hint: "Wall-clock time against the same pool" },
+    { label: "Ad account calls", value: usage.businessUseCase?.callCount ?? 0, hint: "Marketing API, metered per ad account" },
+    { label: "Ad account CPU", value: usage.businessUseCase?.totalCputime ?? 0, hint: "Marketing API processing time" },
+    { label: "Ad account total", value: usage.businessUseCase?.totalTime ?? 0, hint: "Marketing API wall-clock time" },
+  ];
 
   const checklist = [
     { label: "META_APP_ID", ok: Boolean(config.appId), value: config.appId ? `${config.appId.slice(0, 6)}••••••` : "missing" },
@@ -157,6 +168,52 @@ export default async function SettingsPage({
           </ul>
           <div className="px-5 pb-5">
             <CopyButton value={config.redirectUri} label="Copy redirect URI" />
+          </div>
+        </Panel>
+
+        <Panel className="lg:col-span-3">
+          <PanelHeader
+            title="API quota"
+            subtitle="Reported by Meta on the most recent request"
+            icon={<Gauge className="h-4 w-4" />}
+            right={cooldown > 0 ? <Badge tone="warn">Paused {Math.ceil(cooldown / 1000)}s</Badge> : null}
+          />
+          <div className="px-5 pb-5 pt-4">
+            {usage.at ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {quotaBars.map((bar) => (
+                  <div key={bar.label} className="rounded-xl border border-line/70 px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className="text-[10px] uppercase tracking-wide text-faint">{bar.label}</p>
+                      <p className="num text-[12px] font-semibold">{bar.value}%</p>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink/10">
+                      <div
+                        className={cn("h-full rounded-full", bar.value >= 90 ? "bg-neg" : bar.value >= 60 ? "bg-warn" : "bg-pos")}
+                        style={{ width: `${Math.min(100, bar.value)}%` }}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-[10px] text-faint">{bar.hint}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[12px] text-muted">
+                No request has been made yet this session. Load a report to see the current quota.
+              </p>
+            )}
+            <p className="mt-3 text-[11px] text-faint">
+              The app-level pool is 200 calls per hour for every user of the app, shared across all of them. It is charged
+              for calls that use the user token and are not ads API calls — reading Pages and video creatives, for
+              instance — while ads reporting is metered separately per ad account. MetaInsight caps concurrency at 4,
+              batches video lookups 50 at a time and pauses for 60 seconds once Meta reports a limit.
+            </p>
+            {usage.regainAccessInMinutes ? (
+              <p className="mt-2 text-[11px] font-medium text-warn">
+                Meta estimates {usage.regainAccessInMinutes} minute
+                {usage.regainAccessInMinutes === 1 ? "" : "s"} until access is restored.
+              </p>
+            ) : null}
           </div>
         </Panel>
       </div>

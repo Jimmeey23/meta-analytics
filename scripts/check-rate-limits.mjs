@@ -18,6 +18,21 @@ const server = createServer(async (req, res) => {
   live++; peak = Math.max(peak, live); total++
   await new Promise(r => setTimeout(r, 40))
   live--
+  if (mode.startsWith('usage')) {
+    const app = mode === 'usage-high'
+      ? { call_count: 94, total_time: 10, total_cputime: 8 }
+      : { call_count: 12, total_time: 3, total_cputime: 4 }
+    const buc = mode === 'usage-regain'
+      ? { 'act_1': [{ type: 'ads_insights', call_count: 99, total_time: 90, total_cputime: 80, estimated_time_to_regain_access: 15 }] }
+      : { 'act_1': [{ type: 'ads_insights', call_count: 20, total_time: 5, total_cputime: 6 }] }
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'x-app-usage': JSON.stringify(app),
+      'x-business-use-case-usage': JSON.stringify(buc),
+    })
+    res.end(JSON.stringify({ data: [] }))
+    return
+  }
   if (mode === 'limit') {
     res.writeHead(400, {'content-type':'application/json'})
     res.end(JSON.stringify({ error: { message: 'User request limit reached', code: 17, type: 'OAuthException' } }))
@@ -53,5 +68,32 @@ try {
   assert.equal(total - afterBreaker, 0, 'breaker must stop calls reaching Meta')
   assert.ok(errs.every(e=>/paused/.test(e)), 'callers should see the cooldown message')
   assert.ok(m.rateLimitCooldownMs() > 0)
+  // Meta's usage headers must drive backoff before the pool is exhausted.
+  mode = 'usage-low'
+  await new Promise(r => setTimeout(r, 100))
+  m.__resetForTests?.()
+  await m.getEdge('T','z','edge',{}).catch(()=>{})
+  let u = m.graphUsage()
+  console.log('parsed app usage:', u.app)
+  assert.deepEqual(u.app, { callCount: 12, totalTime: 3, totalCputime: 4 })
+  assert.deepEqual(u.businessUseCase, { callCount: 20, totalTime: 5, totalCputime: 6 })
+  assert.equal(m.rateLimitCooldownMs(), 0, 'low usage must not pause requests')
+
+  mode = 'usage-high'
+  await m.getEdge('T','z','edge',{}).catch(()=>{})
+  u = m.graphUsage()
+  console.log('app usage at ceiling:', u.app.callCount, '-> cooldown', m.rateLimitCooldownMs() > 0)
+  assert.equal(u.app.callCount, 94)
+  assert.ok(m.rateLimitCooldownMs() > 0, 'must pause before the pool is exhausted')
+
+  // A regain estimate from Meta should win over the fixed cooldown.
+  m.__resetForTests?.()
+  mode = 'usage-regain'
+  await m.getEdge('T','z','edge',{}).catch(()=>{})
+  const wait = m.rateLimitCooldownMs()
+  console.log('regain estimate honoured:', Math.round(wait/1000), 's (want ~900)')
+  assert.ok(wait > 800_000 && wait <= 900_000, `expected ~15min cooldown, got ${wait}ms`)
+  assert.equal(m.graphUsage().regainAccessInMinutes, 15)
+
   console.log('\nthrottle + breaker checks passed')
 } finally { rmSync(out,{recursive:true,force:true}); server.close() }

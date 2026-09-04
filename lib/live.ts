@@ -3,7 +3,7 @@ import type {
   Account, AdRow, AdSetRow, Breakdown, CampaignRow, FunnelStep, Lead, LeadForm,
   PixelConfig, PixelDiagnostic, PixelEvent, Range, ReportData, SeriesPoint,
 } from "./types";
-import { getEdge, getEdgePaged, getInsights, getManyByIds, graphRequest } from "./meta";
+import { getEdge, getEdgePaged, getInsights, getManyByIds, graphRequest, graphUsage } from "./meta";
 import { creativeFrom, videoIdsOf } from "./creative";
 import {
   costForAction, deriveKpis, emptyKpis, pickResult, roasFrom, sumActions, sumActionValues,
@@ -52,8 +52,12 @@ async function safe<T>(ctx: Ctx, label: string, fn: () => Promise<T>, fallback: 
 /**
  * Memoises a per-token lookup that changes rarely, keyed on a hash of the
  * token so the token itself is never used as a map key in memory dumps.
+ *
+ * These reads use the user token and are not ads API calls, so each one is
+ * charged against the app-level pool of 200 calls per hour per user. Caching
+ * them is the difference between 6 calls an hour and one per page view.
  */
-const PAGE_TTL = 10 * 60 * 1000;
+const PAGE_TTL = 30 * 60 * 1000;
 const pageCache = new Map<string, { at: number; value: any }>();
 
 async function cachedByToken<T>(
@@ -472,6 +476,16 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   const pixelData = await fetchPixel(ctx, token, account.id, range, dailyRows);
 
   const videoById = await resolveVideos(ctx, token, adMeta, adRows);
+
+  // Meta reports quota consumption on every response; say so before the pool
+  // runs out rather than after the first refusal.
+  const quota = graphUsage();
+  const quotaPeak = Math.max(quota.app?.callCount ?? 0, quota.businessUseCase?.callCount ?? 0);
+  if (quotaPeak >= 75) {
+    ctx.warnings.push(
+      `Meta API quota: ${quotaPeak}% of the hourly call allowance is used. Refreshes are being paced; widen the date range less often or wait for the window to reset.`,
+    );
+  }
 
   const series = seriesFrom(dailyRows);
   const prevSeries = seriesFrom(prevRows);

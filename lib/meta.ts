@@ -107,6 +107,7 @@ async function rawRequest(path: string, params: Record<string, unknown>, token?:
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(url, { headers, cache: "no-store" });
+  recordUsage(res.headers);
   let json: any = null;
   try {
     json = await res.json();
@@ -119,6 +120,101 @@ async function rawRequest(path: string, params: Record<string, unknown>, token?:
     throw new MetaError(message, err?.code, res.status);
   }
   return json;
+}
+
+/* ────────────────────────── Quota accounting ────────────────────────── */
+
+/**
+ * Meta reports how much of each quota a call consumed, so there is no need to
+ * model the limits locally.
+ *
+ * `x-app-usage` carries the app-level pool — 200 calls per hour times the
+ * app's user count, shared across all users, and charged for every call that
+ * does not use a Page token and is not an ads API call. That is exactly the
+ * pool the video and `me/accounts` reads were draining.
+ *
+ * `x-business-use-case-usage` carries the separate Marketing API allowances
+ * and, when throttled, how many minutes until access returns.
+ */
+export type GraphUsage = {
+  /** Percentages of the app-level hourly pool, 0-100. */
+  app: { callCount: number; totalTime: number; totalCputime: number } | null;
+  /** Worst per-account business-use-case percentages seen, 0-100. */
+  businessUseCase: { callCount: number; totalTime: number; totalCputime: number } | null;
+  /** Minutes Meta says remain before access is restored, when it says so. */
+  regainAccessInMinutes: number | null;
+  at: number | null;
+};
+
+let usage: GraphUsage = { app: null, businessUseCase: null, regainAccessInMinutes: null, at: null };
+
+export function graphUsage(): GraphUsage {
+  return usage;
+}
+
+/** Clears quota state between cases in scripts/check-rate-limits. */
+export function __resetForTests() {
+  usage = { app: null, businessUseCase: null, regainAccessInMinutes: null, at: null };
+  throttledUntil = 0;
+}
+
+/** Percentage above which requests are held back to leave headroom. */
+const USAGE_CEILING = 90;
+
+function parseJsonHeader(value: string | null) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function recordUsage(headers: Headers) {
+  const app = parseJsonHeader(headers.get("x-app-usage"));
+  const buc = parseJsonHeader(headers.get("x-business-use-case-usage"));
+  const next: GraphUsage = { ...usage, at: Date.now() };
+
+  if (app) {
+    next.app = {
+      callCount: Number(app.call_count ?? 0),
+      totalTime: Number(app.total_time ?? 0),
+      totalCputime: Number(app.total_cputime ?? 0),
+    };
+  }
+
+  if (buc && typeof buc === "object") {
+    // Keyed by ad account id, each holding an array of per-type entries.
+    let worst = { callCount: 0, totalTime: 0, totalCputime: 0 };
+    let regain: number | null = null;
+    for (const entries of Object.values(buc as Record<string, any[]>)) {
+      for (const entry of entries ?? []) {
+        worst = {
+          callCount: Math.max(worst.callCount, Number(entry.call_count ?? 0)),
+          totalTime: Math.max(worst.totalTime, Number(entry.total_time ?? 0)),
+          totalCputime: Math.max(worst.totalCputime, Number(entry.total_cputime ?? 0)),
+        };
+        const wait = Number(entry.estimated_time_to_regain_access ?? 0);
+        if (wait > 0) regain = Math.max(regain ?? 0, wait);
+      }
+    }
+    next.businessUseCase = worst;
+    next.regainAccessInMinutes = regain;
+    // Meta's own estimate beats a fixed cooldown when it offers one.
+    if (regain && regain > 0) throttledUntil = Math.max(throttledUntil, Date.now() + regain * 60_000);
+  }
+
+  usage = next;
+
+  // Back off before the pool is exhausted rather than after.
+  const peak = Math.max(
+    next.app?.callCount ?? 0, next.app?.totalTime ?? 0, next.app?.totalCputime ?? 0,
+    next.businessUseCase?.callCount ?? 0, next.businessUseCase?.totalTime ?? 0,
+    next.businessUseCase?.totalCputime ?? 0,
+  );
+  if (peak >= USAGE_CEILING) {
+    throttledUntil = Math.max(throttledUntil, Date.now() + COOLDOWN_MS);
+  }
 }
 
 /* ───────────────── Throttling and rate-limit handling ───────────────── */
