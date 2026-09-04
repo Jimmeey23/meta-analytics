@@ -176,4 +176,56 @@ export async function getEdge(token: string, parent: string, edge: string, param
   return (json?.data ?? []) as any[];
 }
 
+/** Meta codes meaning "the response you asked for is too big to build". */
+const TOO_MUCH_DATA = new Set([1, 2, 4, 17, 613]);
+
+function isTooMuchData(err: unknown) {
+  if (!(err instanceof MetaError)) return false;
+  return (
+    (err.code !== undefined && TOO_MUCH_DATA.has(err.code)) ||
+    /reduce the amount of data/i.test(err.message)
+  );
+}
+
+/**
+ * Reads an edge across pages, shrinking the page size whenever Meta
+ * complains that the requested payload is too large.
+ *
+ * `limit` is the starting page size, halved down to `minLimit` on each
+ * "reduce the amount of data" error. `max` caps the total rows returned
+ * and `maxPages` caps the number of round trips.
+ */
+export async function getEdgePaged(
+  token: string,
+  parent: string,
+  edge: string,
+  params: Record<string, unknown>,
+  opts: { limit?: number; minLimit?: number; max?: number; maxPages?: number } = {},
+) {
+  const { minLimit = 5, max = 2000, maxPages = 25 } = opts;
+  let limit = opts.limit ?? 50;
+  const rows: any[] = [];
+  let after: string | undefined;
+
+  for (let page = 0; page < maxPages && rows.length < max; page++) {
+    let json: any;
+    try {
+      json = await request(`${parent}/${edge}`, { ...params, limit, after }, token);
+    } catch (err) {
+      if (isTooMuchData(err) && limit > minLimit) {
+        limit = Math.max(minLimit, Math.floor(limit / 2));
+        page--; // retry this same page with a smaller window
+        continue;
+      }
+      // Partial data beats none: surface what we already have.
+      if (rows.length) return rows.slice(0, max);
+      throw err;
+    }
+    rows.push(...((json?.data ?? []) as any[]));
+    after = json?.paging?.cursors?.after;
+    if (!json?.paging?.next || !after) break;
+  }
+  return rows.slice(0, max);
+}
+
 export { request as graphRequest };

@@ -2,7 +2,7 @@ import type {
   Account, AdRow, AdSetRow, Breakdown, CampaignRow, FunnelStep, Lead, LeadForm,
   PixelConfig, PixelDiagnostic, PixelEvent, Range, ReportData, SeriesPoint,
 } from "./types";
-import { getEdge, getInsights, graphRequest } from "./meta";
+import { getEdge, getEdgePaged, getInsights, graphRequest } from "./meta";
 import {
   costForAction, deriveKpis, emptyKpis, pickResult, roasFrom, sumActions, sumActionValues,
   toBreakdownRows, toNumber, type Action,
@@ -154,8 +154,11 @@ function mapLead(row: any, formName: string, formId: string): Lead {
 async function fetchLeads(ctx: Ctx, token: string, range: Range) {
   const since = Math.floor(Date.parse(`${range.since}T00:00:00Z`) / 1000);
   const until = Math.floor(Date.parse(`${range.until}T23:59:59Z`) / 1000);
+  // Read the page list on its own. Expanding leadgen_forms inline makes the
+  // whole request fail with "(#10) insufficient privileges" as soon as the
+  // user lacks Leads Access on any single page, so forms are fetched per page.
   const pages = await safe<any[]>(ctx, "Pages", () =>
-    getEdge(token, "me", "accounts", { fields: "id,name,access_token,leadgen_forms{id,name,status,leads_count,created_time,locale,questions{id,label,type}}", limit: 100 }), []);
+    getEdge(token, "me", "accounts", { fields: "id,name,access_token", limit: 100 }), []);
 
   const forms: LeadForm[] = [];
   const leads: Lead[] = [];
@@ -163,7 +166,12 @@ async function fetchLeads(ctx: Ctx, token: string, range: Range) {
 
   for (const page of pages) {
     const pageToken = (page.access_token as string) || token;
-    for (const form of page.leadgen_forms?.data ?? []) {
+    const pageForms = await safe<any[]>(ctx, `Lead forms (${page.name ?? page.id})`, () =>
+      getEdge(pageToken, String(page.id), "leadgen_forms", {
+        fields: "id,name,status,leads_count,created_time,locale,questions{id,label,type}",
+        limit: 50,
+      }), []);
+    for (const form of pageForms) {
       forms.push({
         id: String(form.id),
         name: form.name ?? "Untitled form",
@@ -257,7 +265,7 @@ async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Ran
   const stats = await safe<any>(ctx, "Pixel stats", async () => {
     const json = await graphRequest(
       `${primary.id}/stats`,
-      { start_time: start, end_time: end, aggregation: "event_type" },
+      { start_time: start, end_time: end, aggregation: "event" },
       token,
     );
     return json;
@@ -265,10 +273,15 @@ async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Ran
 
   let events = eventsFromActions([], dailyRows);
   if (stats?.data?.length) {
-    for (const row of stats.data) {
-      const name = row.event_name ?? row.event ?? row.name;
-      const count = Number(row.count ?? row.value ?? 0);
-      if (!name || !count) continue;
+    // aggregation=event returns buckets whose own `data` array holds the
+    // per-event rows; older shapes put those rows at the top level.
+    const rows: any[] = stats.data.flatMap((bucket: any) =>
+      Array.isArray(bucket?.data) ? bucket.data : [bucket],
+    );
+    for (const row of rows) {
+      const name = row.event_name ?? row.event ?? row.value ?? row.name;
+      const count = Number(row.count ?? row.total ?? 0);
+      if (!name || typeof name !== "string" || !count) continue;
       const existing = events.find((e) => e.event === name);
       if (existing) existing.count = Math.max(existing.count, count);
       else events.unshift({ event: name, label: name, count, trend: [], delta: 0, matched: 85, quality: "medium" });
@@ -332,11 +345,17 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       safe<any[]>(ctx, "Daily insights", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: timeRange, time_increment: 1, limit: 400 }), []),
       safe<any[]>(ctx, "Previous-period insights", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: prevTimeRange, time_increment: 1, limit: 400 }), []),
       safe<any[]>(ctx, "Campaign insights", () => getInsights(token, account.id, { fields: `campaign_id,campaign_name,objective,${BASE_FIELDS}`, level: "campaign", time_range: timeRange, limit: 500 }), []),
-      safe<any[]>(ctx, "Campaign metadata", () => getEdge(token, account.id, "campaigns", { fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time,budget_remaining", limit: 500 }), []),
+      safe<any[]>(ctx, "Campaign metadata", () => getEdgePaged(token, account.id, "campaigns", {
+        fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time,budget_remaining",
+      }, { limit: 100, max: 500 }), []),
       safe<any[]>(ctx, "Ad set insights", () => getInsights(token, account.id, { fields: `adset_id,adset_name,campaign_id,campaign_name,${BASE_FIELDS}${RANKING_FIELDS}`, level: "adset", time_range: timeRange, limit: 500 }), []),
-      safe<any[]>(ctx, "Ad set metadata", () => getEdge(token, account.id, "adsets", { fields: "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,targeting{age_min,age_max,genders,geo_locations,publisher_platforms,facebook_positions,instagram_positions,device_platforms,interests,flexible_spec}", limit: 300 }), []),
+      safe<any[]>(ctx, "Ad set metadata", () => getEdgePaged(token, account.id, "adsets", {
+        fields: "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,targeting{age_min,age_max,genders,geo_locations,publisher_platforms,facebook_positions,instagram_positions,device_platforms,interests,flexible_spec}",
+      }, { limit: 25, max: 300 }), []),
       safe<any[]>(ctx, "Ad insights", () => getInsights(token, account.id, { fields: `ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,${BASE_FIELDS}${RANKING_FIELDS}`, level: "ad", time_range: timeRange, limit: 500 }), []),
-      safe<any[]>(ctx, "Ad metadata", () => getEdge(token, account.id, "ads", { fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_url,thumbnail_url,object_story_spec,call_to_action_type,asset_feed_spec}", limit: 400 }), []),
+      safe<any[]>(ctx, "Ad metadata", () => getEdgePaged(token, account.id, "ads", {
+        fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_url,thumbnail_url,object_story_spec,call_to_action_type,asset_feed_spec}",
+      }, { limit: 25, max: 400 }), []),
       safe<any[]>(ctx, "Age & gender breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "age,gender", time_range: timeRange, limit: 200 }), []),
       safe<any[]>(ctx, "Platform breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "publisher_platform", time_range: timeRange, limit: 50 }), []),
       safe<any[]>(ctx, "Placement breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "publisher_platform,platform_position", time_range: timeRange, limit: 200 }), []),
