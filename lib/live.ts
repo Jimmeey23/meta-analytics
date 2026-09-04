@@ -3,6 +3,7 @@ import type {
   PixelConfig, PixelDiagnostic, PixelEvent, Range, ReportData, SeriesPoint,
 } from "./types";
 import { getEdge, getEdgePaged, getInsights, graphRequest } from "./meta";
+import { creativeFrom, videoIdsOf } from "./creative";
 import {
   costForAction, deriveKpis, emptyKpis, pickResult, roasFrom, sumActions, sumActionValues,
   toBreakdownRows, toNumber, type Action,
@@ -354,7 +355,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       }, { limit: 25, max: 300 }), []),
       safe<any[]>(ctx, "Ad insights", () => getInsights(token, account.id, { fields: `ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,${BASE_FIELDS}${RANKING_FIELDS}`, level: "ad", time_range: timeRange, limit: 500 }), []),
       safe<any[]>(ctx, "Ad metadata", () => getEdgePaged(token, account.id, "ads", {
-        fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_url,thumbnail_url,object_story_spec,call_to_action_type,asset_feed_spec}",
+        fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_url,thumbnail_url,video_id,object_story_spec,call_to_action_type,asset_feed_spec}",
       }, { limit: 25, max: 400 }), []),
       safe<any[]>(ctx, "Age & gender breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "age,gender", time_range: timeRange, limit: 200 }), []),
       safe<any[]>(ctx, "Platform breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "publisher_platform", time_range: timeRange, limit: 50 }), []),
@@ -376,7 +377,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   const pixelData = await fetchPixel(ctx, token, account.id, range, dailyRows);
 
   // Resolve playable sources separately so the main ad request remains small.
-  const videoIds = [...new Set(adMeta.map((ad: any) => ad.creative?.video_id).filter(Boolean))] as string[];
+  const videoIds = [...new Set(adMeta.flatMap((ad: any) => videoIdsOf(ad.creative)))];
   const videoRows = await Promise.all(videoIds.map(async (id) => {
     try {
       return await graphRequest(id, { fields: "id,source,picture,permalink_url" }, token);
@@ -454,15 +455,6 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   const adMetaById = new Map<string, any>(adMeta.map((a) => [String(a.id), a]));
   const ads: AdRow[] = adRows.map((r) => {
     const meta = adMetaById.get(String(r.ad_id));
-    const creative = meta?.creative;
-    const videoMeta: any = creative?.video_id ? videoById.get(String(creative.video_id)) : undefined;
-    const spec = creative?.object_story_spec ?? {};
-    const video = spec?.video_data;
-    const link = spec?.link_data;
-    const photo = spec?.template_data ?? spec?.photo_data;
-    const title = creative?.title ?? video?.title?.text ?? link?.name ?? link?.title ?? photo?.name;
-    const body = creative?.body ?? video?.message ?? link?.message ?? video?.description?.text ?? link?.description;
-    const thumbnail = creative?.thumbnail_url ?? creative?.image_url ?? video?.image_url ?? link?.image_url ?? link?.picture ?? photo?.image_url ?? creative?.asset_feed_spec?.images?.[0]?.url;
     return {
       id: String(r.ad_id),
       adSetId: String(r.adset_id),
@@ -478,16 +470,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       ...kpiFrom(r, r.objective),
       trend: [],
       location: inferStudioLocation(r.ad_name, r.adset_name, r.campaign_name, meta?.name),
-      creative: {
-        id: creative?.id,
-        title, body, thumbnail,
-        imageUrl: creative?.image_url,
-        videoUrl: videoMeta?.source,
-        permalink: videoMeta?.permalink_url,
-        videoId: creative?.video_id ? String(creative.video_id) : undefined,
-        cta: creative?.call_to_action_type ?? video?.call_to_action?.value?.type ?? link?.call_to_action?.value?.type,
-        format: video ? "Video" : link?.child_attachments?.length ? "Carousel" : link ? "Link" : "Image",
-      },
+      creative: creativeFrom(meta?.creative, videoById),
     };
   });
 

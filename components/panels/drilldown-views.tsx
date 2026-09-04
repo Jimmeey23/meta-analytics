@@ -324,7 +324,16 @@ function CreativeView({ p }: { p: any }) {
         <div className="rounded-2xl border border-line/70 bg-gradient-to-br from-brand-500/10 via-accent/5 to-transparent p-4">
           <div className="mx-auto w-full max-w-[280px] overflow-hidden rounded-2xl border border-line bg-surface shadow-soft">
             <div className="relative aspect-square w-full bg-gradient-to-br from-brand-500/30 via-accent/25 to-accent-2/20">
-              {ad.creative?.thumbnail ? (
+              {ad.creative?.videoUrl ? (
+                <video
+                  src={ad.creative.videoUrl}
+                  poster={ad.creative.thumbnail}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="h-full w-full bg-black object-contain"
+                />
+              ) : ad.creative?.thumbnail ? (
                 <img src={ad.creative.thumbnail} alt="" className="h-full w-full object-cover" />
               ) : (
                 <div className="grid h-full w-full place-items-center p-5 text-center">
@@ -347,8 +356,24 @@ function CreativeView({ p }: { p: any }) {
             </div>
           </div>
           <p className="mt-3 text-center text-[10px] text-faint">
-            {ad.creative?.thumbnail ? "Live creative preview" : "Preview rendered from the ad's copy (image thumbnail not returned by the API)"}
+            {ad.creative?.videoUrl
+              ? "Live video creative"
+              : ad.creative?.thumbnail
+                ? "Live creative preview"
+                : "Preview rendered from the ad's copy (image thumbnail not returned by the API)"}
           </p>
+          {ad.creative?.permalink ? (
+            <p className="mt-1 text-center text-[10px]">
+              <a
+                href={ad.creative.permalink.startsWith("http") ? ad.creative.permalink : `https://www.facebook.com${ad.creative.permalink}`}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-brand-500 underline-offset-2 hover:underline"
+              >
+                Open on Facebook
+              </a>
+            </p>
+          ) : null}
         </div>
 
         <div>
