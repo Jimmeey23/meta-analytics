@@ -2,7 +2,7 @@ import * as React from "react";
 import {
   AlertTriangle, CheckCircle2, CircleSlash, Database, Facebook, KeyRound, Link2, RefreshCw, Server, ShieldCheck, XCircle,
 } from "lucide-react";
-import { getSession, isDemo } from "@/lib/data";
+import { getSession, resolveAccounts } from "@/lib/data";
 import { metaConfig, SCOPES } from "@/lib/meta";
 import { Badge, Callout, Panel, PanelHeader } from "@/components/ui/primitives";
 import { CopyButton } from "@/components/panels/copy-button";
@@ -23,7 +23,8 @@ export default async function SettingsPage({
   const sp = await searchParams;
   const session = await getSession();
   const config = metaConfig();
-  const demo = isDemo(session);
+  const { live, reason, accounts } = await resolveAccounts(session);
+  const demo = !live;
 
   const checklist = [
     { label: "META_APP_ID", ok: Boolean(config.appId), value: config.appId ? `${config.appId.slice(0, 6)}••••••` : "missing" },
@@ -55,9 +56,9 @@ export default async function SettingsPage({
         <Panel className="lg:col-span-2">
           <PanelHeader
             title="Connection"
-            subtitle={demo ? "Running on sample data" : "Connected to the Meta Marketing API"}
+            subtitle={live ? "Connected to the Meta Marketing API" : session ? "Signed in, but serving sample data" : "Running on sample data"}
             icon={<Link2 className="h-4 w-4" />}
-            right={<Badge tone={demo ? "warn" : "pos"}>{demo ? "Demo mode" : "Live"}</Badge>}
+            right={<Badge tone={live ? "pos" : "warn"}>{live ? "Live" : session ? "Signed in · sample data" : "Demo mode"}</Badge>}
           />
           <div className="space-y-4 px-5 pb-5 pt-4">
             {session ? (
@@ -83,6 +84,23 @@ export default async function SettingsPage({
                 No Meta account is connected yet. Connect one to replace the sample data with live reporting across every page.
               </p>
             )}
+
+            {session && !live ? (
+              <div className="rounded-xl border border-warn/30 bg-warn/5 px-3 py-2.5">
+                <p className="text-[11px] font-semibold text-warn">Your account is connected, but no live ad account could be read</p>
+                <p className="mt-1 text-[12px] text-muted">{reason ?? "Meta returned no ad accounts for this user."}</p>
+                <p className="mt-1.5 text-[11px] text-faint">
+                  Every page is showing sample data until this resolves. Reconnect below to refresh the token, or grant the
+                  signed-in user access to an ad account in Meta Business Settings → Accounts → Ad accounts.
+                </p>
+              </div>
+            ) : null}
+
+            {live ? (
+              <p className="text-[12px] text-muted">
+                {accounts.length} live ad {accounts.length === 1 ? "account" : "accounts"} available.
+              </p>
+            ) : null}
 
             <div className="flex flex-wrap gap-2">
               {demo ? (

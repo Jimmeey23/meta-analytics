@@ -101,9 +101,12 @@ async function request(path: string, params: Record<string, unknown>, token?: st
     if (value === undefined || value === null) continue;
     url.searchParams.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
   }
-  if (token) url.searchParams.set("access_token", token);
+  // The token travels in the Authorization header, never the query string:
+  // a URL ends up in proxy logs, error messages and Next's dev overlay.
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
+  const res = await fetch(url, { headers, cache: "no-store" });
   let json: any = null;
   try {
     json = await res.json();

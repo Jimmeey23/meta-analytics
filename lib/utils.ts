@@ -94,3 +94,18 @@ export function initials(name: string) {
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 }
+
+/**
+ * Strips credentials out of text that reaches the UI or a log.
+ *
+ * Meta echoes the offending value back in some errors ("Malformed access
+ * token EAAG..."), so an unfiltered warning would render the token on the
+ * page. Long opaque tokens, `access_token=` query values and app secrets
+ * are replaced with a marker.
+ */
+export function redactSecrets(text: string) {
+  return text
+    .replace(/(access_token|client_secret|appsecret_proof)=[^&\s]+/gi, "$1=[redacted]")
+    .replace(/\bEAA[A-Za-z0-9_-]{8,}/g, "[redacted token]")
+    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[redacted]");
+}

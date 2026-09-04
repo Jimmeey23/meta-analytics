@@ -10,7 +10,7 @@ import {
 } from "./metrics";
 import { hourFromKey, daysInRange } from "./metrics";
 import { previousRange } from "./ranges";
-import { inferStudioLocation, safeDiv, sum } from "./utils";
+import { inferStudioLocation, redactSecrets, safeDiv, sum } from "./utils";
 
 const BASE_FIELDS = [
   "spend", "impressions", "reach", "frequency", "clicks", "ctr", "cpc", "cpm", "cpp",
@@ -41,7 +41,7 @@ async function safe<T>(ctx: Ctx, label: string, fn: () => Promise<T>, fallback: 
     return await fn();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    ctx.warnings.push(`${label}: ${msg}`);
+    ctx.warnings.push(`${label}: ${redactSecrets(msg)}`);
     return fallback;
   }
 }

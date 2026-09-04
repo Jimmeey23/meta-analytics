@@ -1,13 +1,14 @@
 import "server-only";
 import { cookies } from "next/headers";
-import type { Account, Range, ReportData } from "./types";
+import { cache as requestCache } from "react";
+import type { Account, Mode, Range, ReportData } from "./types";
 import { COOKIE_NAME, decodeSession, type Session } from "./meta";
 import { metaConfig } from "./meta";
 import { buildDemoData, DEMO_ACCOUNTS } from "./demo";
 import { buildLiveData } from "./live";
 import { resolveRange } from "./ranges";
 import { getAccounts } from "./meta";
-import { safeDiv, sum } from "./utils";
+import { redactSecrets, safeDiv, sum } from "./utils";
 
 const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const DAY_NAMES_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
@@ -21,8 +22,25 @@ export function isDemo(session: Session | null) {
   return !session?.accessToken || metaConfig().forceDemo;
 }
 
-export async function listAccounts(session: Session | null): Promise<Account[]> {
-  if (!session?.accessToken || metaConfig().forceDemo) return DEMO_ACCOUNTS;
+export type AccountResolution = {
+  accounts: Account[];
+  /** True only when `accounts` are the signed-in user's real ad accounts. */
+  live: boolean;
+  /** Why live accounts are unavailable, already redacted for display. */
+  reason?: string;
+};
+
+/**
+ * Resolves which ad accounts to report on.
+ *
+ * Falling back to the demo accounts while still holding a live token used to
+ * mean every downstream request ran against a fabricated account id, so the
+ * app claimed "live" and then failed every dataset. `live` now says whether
+ * the accounts are real, and the caller serves demo data when they are not.
+ */
+export const resolveAccounts = requestCache(async (session: Session | null): Promise<AccountResolution> => {
+  if (!session?.accessToken) return { accounts: DEMO_ACCOUNTS, live: false };
+  if (metaConfig().forceDemo) return { accounts: DEMO_ACCOUNTS, live: false, reason: "FORCE_DEMO is set to 1." };
   try {
     const rows = await getAccounts(session.accessToken);
     const accounts: Account[] = rows.map((r) => ({
@@ -34,10 +52,27 @@ export async function listAccounts(session: Session | null): Promise<Account[]> 
       amountSpent: Number(r.amount_spent ?? 0) / 100,
       businessName: r.business_name,
     }));
-    return accounts.length ? accounts : DEMO_ACCOUNTS;
-  } catch {
-    return DEMO_ACCOUNTS;
+    if (!accounts.length) {
+      return {
+        accounts: DEMO_ACCOUNTS,
+        live: false,
+        reason: "This Meta user has no ad accounts, or none were shared with the app.",
+      };
+    }
+    return { accounts, live: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { accounts: DEMO_ACCOUNTS, live: false, reason: redactSecrets(message) };
   }
+});
+
+export async function listAccounts(session: Session | null): Promise<Account[]> {
+  return (await resolveAccounts(session)).accounts;
+}
+
+/** The mode the UI should advertise — "live" only when real accounts resolved. */
+export async function resolveMode(session: Session | null): Promise<Mode> {
+  return (await resolveAccounts(session)).live ? "live" : "demo";
 }
 
 /** Fill in derived fields that both modes share (weekday aggregation). */
@@ -55,7 +90,7 @@ function finalize(data: ReportData): ReportData {
   return data;
 }
 
-const cache = new Map<string, { at: number; data: ReportData }>();
+const reportCache = new Map<string, { at: number; data: ReportData }>();
 const TTL = 5 * 60 * 1000;
 
 export type ReportOptions = {
@@ -69,27 +104,32 @@ export type ReportOptions = {
 export async function loadReport(opts: ReportOptions = {}): Promise<{ data: ReportData; accounts: Account[]; session: Session | null; range: Range }> {
   const session = opts.session !== undefined ? opts.session : await getSession();
   const range = resolveRange(opts.rangeKey, opts.since, opts.until);
-  const accounts = await listAccounts(session);
+  const { accounts, live, reason } = await resolveAccounts(session);
   const accountId = opts.accountId && accounts.some((a) => a.id === opts.accountId) ? opts.accountId : accounts[0]?.id ?? DEMO_ACCOUNTS[0].id;
   const account = accounts.find((a) => a.id === accountId) ?? accounts[0] ?? DEMO_ACCOUNTS[0];
 
-  if (isDemo(session)) {
-    return { data: finalize(buildDemoData(accountId, range, account.name)), accounts, session, range };
+  if (!live) {
+    const data = finalize(buildDemoData(accountId, range, account.name));
+    // A signed-in user seeing sample data needs to know why.
+    if (session?.accessToken && reason) {
+      data.warnings = [`Meta account: ${reason} Showing sample data instead.`, ...(data.warnings ?? [])];
+    }
+    return { data, accounts, session, range };
   }
 
   const key = `${session!.userId}:${accountId}:${range.since}:${range.until}`;
-  const hit = cache.get(key);
+  const hit = reportCache.get(key);
   if (hit && Date.now() - hit.at < TTL) {
     return { data: hit.data, accounts, session, range };
   }
 
   const data = finalize(await buildLiveData(session!.accessToken, account, range));
-  cache.set(key, { at: Date.now(), data });
+  reportCache.set(key, { at: Date.now(), data });
   return { data, accounts, session, range };
 }
 
 export function clearReportCache() {
-  cache.clear();
+  reportCache.clear();
 }
 
 export { DAY_NAMES_SHORT, DAY_NAMES_LONG };

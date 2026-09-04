@@ -2,6 +2,10 @@ import { AlertTriangle } from "lucide-react";
 
 function stepsFor(warning: string) {
   const value = warning.toLowerCase();
+  if (value.includes("access token") || value.includes("session has expired") || value.includes("code 190"))
+    return ["Open Settings and choose Reconnect Meta account — the saved token is no longer valid.", "Approve the permission dialog again so a fresh long-lived token is issued.", "If it fails immediately, confirm META_APP_ID, META_APP_SECRET and META_REDIRECT_URI match the app in developers.facebook.com."];
+  if (value.startsWith("meta account:"))
+    return ["Open Settings to see the exact response Meta returned for this user.", "In Meta Business Settings → Accounts → Ad accounts, confirm the signed-in user has access to at least one ad account.", "Reconnect MetaInsight so the new asset permissions are picked up."];
   if (value.startsWith("pages:") || value.startsWith("lead forms")) return ["Open Meta Business Settings → Integrations → Leads Access.", "Select the affected Page and assign the signed-in user or system user.", "Reconnect MetaInsight so the new Page permissions are included."];
   if (value.startsWith("ad metadata:")) return ["Reduce the selected date range to 7 or 30 days.", "Confirm the user has ads_read access to the selected ad account.", "Retry after Meta rate limits recover; performance data remains available while creative metadata is unavailable."];
   if (value.startsWith("pixel") || value.includes("event")) return ["Open Events Manager and select the pixel shown in MetaInsight.", "Use Test Events to reproduce the affected event.", "Correct the parameter named in Meta’s error, publish the integration, and retest."];
