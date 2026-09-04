@@ -2,6 +2,7 @@
 import * as React from "react";
 import { AlertOctagon, AlertTriangle, Info, Lightbulb, Sparkles, Zap } from "lucide-react";
 import { Badge, EmptyState, Panel } from "@/components/ui/primitives";
+import { useDrilldown } from "./drilldown-context";
 import { cn } from "@/lib/utils";
 import type { Insight } from "@/lib/types";
 
@@ -20,7 +21,8 @@ const STYLES: Record<Insight["severity"], { icon: React.ReactNode; ring: string;
   },
 };
 
-export function InsightCard({ insight }: { insight: Insight }) {
+export function InsightCard({ insight, drillable = true }: { insight: Insight; drillable?: boolean }) {
+  const { open } = useDrilldown();
   const style = STYLES[insight.severity];
   return (
     <Panel className={cn("panel-hover border p-4", style.ring)}>
@@ -32,6 +34,14 @@ export function InsightCard({ insight }: { insight: Insight }) {
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-[14px] font-semibold tracking-tight">{insight.title}</h4>
             <Badge tone={style.tone}>{style.label}</Badge>
+            {drillable ? (
+              <button
+                onClick={() => open({ kind: "insight", payload: { insight } })}
+                className="text-[10px] font-semibold uppercase tracking-wide text-brand-500 hover:underline"
+              >
+                Details →
+              </button>
+            ) : null}
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed text-muted">{insight.detail}</p>
 

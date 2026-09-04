@@ -1,115 +1,208 @@
 "use client";
-
 import * as React from "react";
-import { Activity, ExternalLink, Eye, Image as ImageIcon, MousePointerClick, Play, Search, Target, X } from "lucide-react";
-import type { AdRow } from "@/lib/types";
-import { Badge, EmptyState, Panel, PanelHeader } from "@/components/ui/primitives";
-import { currency, num, pct } from "@/lib/format";
+import {
+  Image as ImageIcon, Maximize2, MousePointerClick, Play, Search,
+} from "lucide-react";
+import { Badge, EmptyState } from "@/components/ui/primitives";
+import { useDrilldown } from "./drilldown-context";
+import { currency, num, pct, rankingLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import type { AdRow, Kpis } from "@/lib/types";
 
-export function CreativeGallery({ ads, code }: { ads: AdRow[]; code: string }) {
+function mediaType(ad: AdRow) {
+  return ad.creative?.videoId || /video|reel/i.test(ad.creative?.format ?? "") ? "Video" : "Image";
+}
+
+export function CreativeGallery({
+  ads, code, account, limit = 12, className,
+}: {
+  ads: AdRow[];
+  code: string;
+  account: Kpis;
+  limit?: number;
+  className?: string;
+}) {
+  const { open } = useDrilldown();
   const [query, setQuery] = React.useState("");
   const [format, setFormat] = React.useState("All");
-  const [location, setLocation] = React.useState("All studios");
-  const [selected, setSelected] = React.useState<AdRow | null>(null);
-  const locations = React.useMemo(() => ["All studios", ...new Set(ads.map((a) => a.location ?? "Unassigned"))], [ads]);
-  const mediaType = (ad: AdRow) => ad.creative?.videoId || /video|reel/i.test(ad.creative?.format ?? "") ? "Video" : "Image";
-  const formats = React.useMemo(() => ["All", ...new Set(ads.map(mediaType))], [ads]);
-  const visible = ads.filter((ad) => {
-    const haystack = `${ad.name} ${ad.adSetName} ${ad.creative?.title ?? ""} ${ad.creative?.body ?? ""}`.toLowerCase();
-    return (!query || haystack.includes(query.toLowerCase()))
-      && (format === "All" || mediaType(ad) === format)
-      && (location === "All studios" || ad.location === location);
-  });
+  const [studio, setStudio] = React.useState("All studios");
 
-  React.useEffect(() => {
-    if (!selected) return;
-    const close = (event: KeyboardEvent) => event.key === "Escape" && setSelected(null);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", close);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", close);
-    };
-  }, [selected]);
+  const items = React.useMemo(
+    () => ads.filter((a) => a.spend > 0 || a.impressions > 0),
+    [ads],
+  );
+  const studios = React.useMemo(
+    () => ["All studios", ...new Set(items.map((a) => a.location ?? "Unassigned"))],
+    [items],
+  );
+  const formats = React.useMemo(
+    () => ["All", ...new Set(items.map(mediaType))],
+    [items],
+  );
 
-  const media = (ad: AdRow, expanded = false) => {
-    if (expanded && ad.creative?.videoUrl) {
-      return <video src={ad.creative.videoUrl} poster={ad.creative.thumbnail} controls playsInline preload="metadata" onError={(event) => event.stopPropagation()} className="max-h-[68vh] h-full w-full object-contain" />;
-    }
-    if (ad.creative?.imageUrl || ad.creative?.thumbnail) {
-      // eslint-disable-next-line @next/next/no-img-element
-      return <img src={expanded ? ad.creative.imageUrl ?? ad.creative.thumbnail : ad.creative.thumbnail ?? ad.creative.imageUrl} alt={`Creative for ${ad.name}`} loading={expanded ? "eager" : "lazy"} onError={(event) => event.stopPropagation()} className={cn("h-full w-full object-contain", expanded && "max-h-[68vh]")} />;
-    }
-    return <div className={cn("grid place-items-center text-center text-faint", expanded ? "aspect-video text-white/60" : "h-full px-5 text-xs")}><div><ImageIcon className="mx-auto mb-2 h-7 w-7" /><span>Media unavailable from Meta</span></div></div>;
-  };
+  const visible = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items.filter((ad) => {
+      const haystack = `${ad.name} ${ad.adSetName} ${ad.creative?.title ?? ""} ${ad.creative?.body ?? ""}`.toLowerCase();
+      return (!q || haystack.includes(q))
+        && (format === "All" || mediaType(ad) === format)
+        && (studio === "All studios" || (ad.location ?? "Unassigned") === studio);
+    }).slice(0, limit);
+  }, [items, query, format, studio, limit]);
+
+  const filters = (
+    <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
+      <label className="relative min-w-[200px] flex-1">
+        <span className="sr-only">Search creatives</span>
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search creative, ad or ad set"
+          className="h-10 w-full rounded-xl border border-line bg-bg pl-9 pr-3 text-sm outline-none focus:border-brand-500"
+        />
+      </label>
+      <select
+        aria-label="Creative format"
+        value={format}
+        onChange={(e) => setFormat(e.target.value)}
+        className="h-10 rounded-xl border border-line bg-bg px-3 text-xs outline-none focus:border-brand-500"
+      >
+        {formats.map((item) => <option key={item}>{item}</option>)}
+      </select>
+      {studios.length > 2 ? (
+        <select
+          aria-label="Studio location"
+          value={studio}
+          onChange={(e) => setStudio(e.target.value)}
+          className="h-10 rounded-xl border border-line bg-bg px-3 text-xs outline-none focus:border-brand-500"
+        >
+          {studios.map((item) => <option key={item}>{item}</option>)}
+        </select>
+      ) : null}
+    </div>
+  );
+
+  if (!items.length) {
+    return (
+      <p className="px-5 py-10 text-center text-xs text-muted">No creatives with delivery in this period.</p>
+    );
+  }
 
   return (
-    <>
-      <Panel>
-        <PanelHeader title="Creative library" subtitle={`${visible.length} ads with performance and studio context`} icon={<ImageIcon className="h-4 w-4" />} />
-        <div className="flex flex-wrap gap-2 px-5 pt-4">
-          <label className="relative min-w-[220px] flex-1">
-            <span className="sr-only">Search creatives</span>
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search creative, ad or ad set" className="h-11 w-full rounded-xl border border-line bg-bg pl-9 pr-3 text-sm outline-none focus:border-brand-500" />
-          </label>
-          <select aria-label="Creative format" value={format} onChange={(e) => setFormat(e.target.value)} className="h-11 rounded-xl border border-line bg-bg px-3 text-xs outline-none focus:border-brand-500">
-            {formats.map((item) => <option key={item}>{item}</option>)}
-          </select>
-          <select aria-label="Studio location" value={location} onChange={(e) => setLocation(e.target.value)} className="h-11 rounded-xl border border-line bg-bg px-3 text-xs outline-none focus:border-brand-500">
-            {locations.map((item) => <option key={item}>{item}</option>)}
-          </select>
+    <div className="pb-1">
+      {filters}
+      {!visible.length ? (
+        <div className="px-5 py-8">
+          <EmptyState icon={<ImageIcon className="h-5 w-5" />} title="No creatives match these filters" />
         </div>
-        <p className="px-5 pt-2 text-[10px] text-faint">Studio is derived from entity naming. Rename unassigned Meta entities with Bandra, Kemps, Bengaluru/BLR, or Mumbai to classify them.</p>
-        <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">
-          {visible.slice(0, 60).map((ad) => (
-            <button key={ad.id} onClick={() => setSelected(ad)} aria-label={`Open creative and performance details for ${ad.name}`} className="group relative overflow-visible rounded-2xl border border-line bg-elevated/40 text-left transition duration-200 hover:z-10 hover:-translate-y-1 hover:scale-[1.035] hover:border-brand-500/40 hover:bg-surface hover:shadow-lift focus:z-10 focus:outline-none focus:ring-2 focus:ring-brand-500 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100">
-              <div className="relative aspect-video overflow-hidden bg-ink/5">
-                <div className="h-full w-full transition duration-300 group-hover:scale-[1.06] motion-reduce:transition-none">{media(ad)}</div>
-                {mediaType(ad) === "Video" ? <span className="absolute inset-0 grid place-items-center bg-black/10"><span className="grid h-11 w-11 place-items-center rounded-full bg-black/70 text-white"><Play className="ml-0.5 h-4 w-4" fill="currentColor" /></span></span> : null}
-                <span className="absolute left-2 top-2"><Badge tone="neutral">{mediaType(ad)}</Badge></span>
-                <span className="absolute bottom-2 right-2 rounded-lg bg-black/75 px-2 py-1 text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">View details</span>
-              </div>
-              <div className="p-3">
-                <div className="flex items-start justify-between gap-2"><p className="line-clamp-2 text-[13px] font-semibold">{ad.creative?.title ?? ad.name}</p><Badge tone="brand">{ad.location ?? "Unassigned"}</Badge></div>
-                <p className="mt-1 line-clamp-2 text-[11px] text-muted">{ad.creative?.body || ad.adSetName}</p>
-                <div className="mt-3 grid grid-cols-4 gap-2 border-t border-line/70 pt-2 text-center">
-                  {[["Spend", currency(ad.spend, code, { compact: true })], ["CTR", pct(ad.ctr)], ["Results", num(ad.results)], ["CPA", currency(ad.costPerResult, code, { compact: true })]].map(([label, value]) => <div key={label}><p className="num text-[11px] font-semibold">{value}</p><p className="text-[9px] uppercase text-faint">{label}</p></div>)}
-                </div>
-              </div>
-            </button>
-          ))}
-          {!visible.length ? <div className="sm:col-span-2 xl:col-span-3"><EmptyState icon={<ImageIcon className="h-5 w-5" />} title="No creatives match these filters" /></div> : null}
-        </div>
-      </Panel>
+      ) : (
+        <div className={cn("grid gap-4 px-5 pb-5 pt-4 sm:grid-cols-2 xl:grid-cols-3", className)}>
+          {visible.map((ad) => {
+            const conv = (ad.leads ?? 0) + (ad.purchases ?? 0);
+            const siblings = ads.filter((s) => s.adSetId === ad.adSetId && s.id !== ad.id);
+            const isVideo = mediaType(ad) === "Video";
+            return (
+              <div key={ad.id} className="group relative z-0 hover:z-30">
+                <button
+                  onClick={() => open({ kind: "creative", payload: { ad, code, account, siblings } })}
+                  className="block w-full text-left"
+                >
+                  <div className="overflow-hidden rounded-2xl border border-line/70 bg-surface transition-all duration-300 group-hover:-translate-y-1 group-hover:border-brand-500/40 group-hover:shadow-lift">
+                    {/* preview */}
+                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-gradient-to-br from-brand-500/25 via-accent/20 to-accent-2/20">
+                      {ad.creative?.thumbnail || ad.creative?.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={ad.creative.thumbnail ?? ad.creative.imageUrl}
+                          alt=""
+                          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                        />
+                      ) : (
+                        <div className="grid h-full w-full place-items-center p-5 text-center">
+                          <div>
+                            <p className="text-[15px] font-semibold leading-snug text-ink">{ad.creative?.title ?? ad.name}</p>
+                            <p className="mt-2 line-clamp-3 text-[11px] text-muted">{ad.creative?.body}</p>
+                          </div>
+                        </div>
+                      )}
+                      <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] font-medium text-white backdrop-blur">
+                        {ad.creative?.format ?? (isVideo ? "Video" : "Image")}
+                      </span>
+                      {isVideo ? (
+                        <span className="absolute inset-0 grid place-items-center">
+                          <span className="grid h-10 w-10 place-items-center rounded-full bg-black/65 text-white">
+                            <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
+                          </span>
+                        </span>
+                      ) : null}
+                      <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-md bg-black/45 text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
+                        <Maximize2 className="h-3.5 w-3.5" />
+                      </span>
 
-      {selected ? (
-        <div role="dialog" aria-modal="true" aria-label={`Creative details for ${selected.name}`} className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && setSelected(null)}>
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-line bg-surface shadow-lift">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface/95 px-5 py-3 backdrop-blur"><div><p className="text-sm font-semibold">{selected.creative?.title ?? selected.name}</p><p className="text-[11px] text-faint">{selected.location} · {selected.adSetName}</p></div><button aria-label="Close creative details" onClick={() => setSelected(null)} className="grid h-11 w-11 place-items-center rounded-xl hover:bg-ink/5"><X className="h-4 w-4" /></button></div>
-            <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(320px,.75fr)]">
-              <div className="overflow-hidden rounded-2xl bg-black">{media(selected, true)}</div>
-              <div className="space-y-4">
-                <div className="flex flex-wrap gap-2"><Badge tone="neutral">{selected.status}</Badge><Badge tone="brand">{selected.creative?.format ?? "Ad"}</Badge>{selected.creative?.cta ? <Badge tone="neutral">{selected.creative.cta.replaceAll("_", " ")}</Badge> : null}</div>
-                <div><p className="text-[10px] font-semibold uppercase tracking-wide text-faint">Primary text</p><p className="mt-1 text-sm leading-relaxed text-muted">{selected.creative?.body || "No primary text returned."}</p></div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">{[
-                  ["Spend", currency(selected.spend, code), Activity], ["Impressions", num(selected.impressions), Eye],
-                  ["Reach", num(selected.reach), Target], ["Clicks", num(selected.clicks), MousePointerClick],
-                  ["CTR", pct(selected.ctr), MousePointerClick], ["CPC", currency(selected.cpc, code), Activity],
-                  [selected.resultLabel || "Results", num(selected.results), Target], ["Cost / result", currency(selected.costPerResult, code), Activity],
-                  ["CPM", currency(selected.cpm, code), Eye], ["Frequency", selected.frequency.toFixed(2), Eye],
-                  ["Revenue", currency(selected.revenue, code), Activity], ["ROAS", selected.roas > 0 ? `${selected.roas.toFixed(2)}×` : "—", Target],
-                  ["Leads", num(selected.leads), Target], ["Purchases", num(selected.purchases), Target],
-                ].map(([label, value, Icon]) => <div key={String(label)} className="rounded-xl border border-line p-3"><div className="flex items-center gap-1.5 text-faint"><Icon className="h-3 w-3" /><p className="text-[9px] uppercase">{label as string}</p></div><p className="num mt-1 text-sm font-semibold">{value as string}</p></div>)}</div>
-                <div className="rounded-xl border border-line p-3 text-[11px]"><p className="font-semibold">Delivery quality</p><div className="mt-2 grid gap-1 text-muted"><p>Quality: <span className="text-ink">{selected.qualityRanking?.replaceAll("_", " ") ?? "Not ranked"}</span></p><p>Engagement: <span className="text-ink">{selected.engagementRanking?.replaceAll("_", " ") ?? "Not ranked"}</span></p><p>Conversion: <span className="text-ink">{selected.conversionRanking?.replaceAll("_", " ") ?? "Not ranked"}</span></p></div></div>
-                {selected.creative?.permalink ? <a href={selected.creative.permalink} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-xl border border-line text-xs font-semibold hover:border-brand-500/40"><ExternalLink className="h-4 w-4" /> Open original on Meta</a> : null}
+                      {/* hover overlay — expands with the full metric set */}
+                      <div className="absolute inset-x-0 bottom-0 translate-y-full bg-black/80 p-3 backdrop-blur transition-transform duration-300 group-hover:translate-y-0">
+                        <div className="grid grid-cols-3 gap-2 text-[10px] text-white">
+                          {[
+                            ["Spend", currency(ad.spend, code, { compact: true })],
+                            ["Impr.", num(ad.impressions)],
+                            ["Reach", num(ad.reach)],
+                            ["CTR", pct(ad.ctr)],
+                            ["CPC", currency(ad.cpc, code, { compact: true })],
+                            ["CPM", currency(ad.cpm, code, { compact: true })],
+                            ["Results", num(ad.results)],
+                            ["CPA", currency(ad.costPerResult, code, { compact: true })],
+                            ["ROAS", ad.roas > 0 ? `${ad.roas.toFixed(2)}×` : "—"],
+                          ].map(([l, v]) => (
+                            <div key={l}>
+                              <p className="text-white/55">{l}</p>
+                              <p className="num font-semibold">{v}</p>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="mt-2 flex items-center gap-1 text-[10px] font-medium text-white/80">
+                          <MousePointerClick className="h-3 w-3" /> Click for full creative analysis
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* footer */}
+                    <div className="space-y-1.5 p-3">
+                      <div className="flex items-start gap-2">
+                        <p className="min-w-0 flex-1 truncate text-[13px] font-medium">{ad.creative?.title ?? ad.name}</p>
+                        <span className="num shrink-0 text-[12px] font-semibold">{currency(ad.spend, code, { compact: true })}</span>
+                      </div>
+                      <p className="truncate text-[10px] text-faint">
+                        {ad.location && ad.location !== "Unassigned" ? `${ad.location} · ` : ""}
+                        {ad.adSetName}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge tone={ad.ctr >= account.ctr ? "pos" : "warn"}>{pct(ad.ctr)} CTR</Badge>
+                        {conv > 0 ? <Badge tone="neutral">{num(conv)} conv.</Badge> : null}
+                        {ad.creative?.cta ? <Badge tone="neutral">{String(ad.creative.cta).replace(/_/g, " ").toLowerCase()}</Badge> : null}
+                        {ad.qualityRanking ? <Badge tone="info">Quality {rankingLabel(ad.qualityRanking)}</Badge> : null}
+                      </div>
+                    </div>
+                  </div>
+                </button>
               </div>
-            </div>
-          </div>
+            );
+          })}
         </div>
-      ) : null}
-    </>
+      )}
+    </div>
+  );
+}
+
+export function CreativeThumb({ ad, className }: { ad: AdRow; className?: string }) {
+  return (
+    <div className={cn("grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500", className)}>
+      {ad.creative?.thumbnail || ad.creative?.imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={ad.creative.thumbnail ?? ad.creative.imageUrl} alt="" className="h-12 w-12 object-cover" />
+      ) : (
+        <ImageIcon className="h-5 w-5" />
+      )}
+    </div>
   );
 }

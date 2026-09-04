@@ -3,9 +3,11 @@ import crypto from "node:crypto";
 
 export const SCOPES = [
   "ads_read",
+  "read_insights",
   "business_management",
   "pages_show_list",
   "pages_read_engagement",
+  "pages_read_user_content",
   "leads_retrieval",
 ].join(",");
 

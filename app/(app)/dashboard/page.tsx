@@ -2,12 +2,14 @@ import * as React from "react";
 import Link from "next/link";
 import {
   Activity, ArrowRight, Facebook, Layers, MousePointerClick, PieChart as PieIcon, Radio,
-  Sparkles, Target, UserPlus, Wallet,
+  Sparkles, Target, UserPlus, Wallet, Wrench,
 } from "lucide-react";
 import { loadReport } from "@/lib/data";
-import { DataQualityAlert } from "@/components/panels/data-quality-alert";
 import { generateInsights, insightScore } from "@/lib/insights";
 import { buildSummary, summaryToText } from "@/lib/summary";
+import { findDiscrepancies } from "@/lib/discrepancies";
+import { DiscrepancyList } from "@/components/panels/discrepancy-list";
+import { DataQualityAlert } from "@/components/panels/data-quality-alert";
 import { ExecutiveSummary } from "@/components/panels/executive-summary";
 import { BudgetPacing } from "@/components/panels/budget-pacing";
 import { Panel, PanelHeader, ScoreGauge, Callout, Avatar, Badge, Sparkline, EmptyState } from "@/components/ui/primitives";
@@ -40,19 +42,20 @@ export default async function DashboardPage({
   const money = (v: number) => currency(v, code, { compact: true });
 
   const platformRows = (data.breakdowns.publisher_platform?.rows ?? []).map((r) => ({
-    label: titleCase(r.key), value: r.spend,
+    label: titleCase(r.key), value: r.spend, row: r,
   }));
   const deviceRows = (data.breakdowns.impression_device?.rows ?? []).map((r) => ({
-    label: titleCase(r.key), value: r.spend,
+    label: titleCase(r.key), value: r.spend, row: r,
   }));
   const placementRows = (data.breakdowns.platform_position?.rows ?? []).slice(0, 6).map((r) => ({
-    label: titleCase(r.key.replace(" · ", " · ")), value: r.spend,
+    label: titleCase(r.key.replace(" · ", " · ")), value: r.spend, row: r,
     sub: r.results > 0 ? `${money(r.costPerResult)}/result` : undefined,
   }));
   const regionRows = (data.breakdowns.region?.rows ?? []).slice(0, 6).map((r) => ({
-    label: r.key, value: r.spend,
+    label: r.key, value: r.spend, row: r,
     sub: r.results > 0 ? `${money(r.costPerResult)}/result` : undefined,
   }));
+  const discrepancies = findDiscrepancies(data);
 
   const ageGender = data.breakdowns["age,gender"]?.rows ?? [];
   const genders = [...new Set(ageGender.map((r) => r.key.split(" · ")[0]))].slice(0, 3);
@@ -105,7 +108,20 @@ export default async function DashboardPage({
             View all {insights.length} insights <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </div>
-        <KpiGrid kpis={data.kpis} prev={data.prevKpis} series={data.series} code={code} days={data.range.days} />
+        <KpiGrid
+          kpis={data.kpis}
+          prev={data.prevKpis}
+          series={data.series}
+          prevSeries={data.prevSeries}
+          code={code}
+          days={data.range.days}
+          rows={data.campaigns.map((c) => ({
+            name: c.name, spend: c.spend, impressions: c.impressions, reach: c.reach, clicks: c.clicks,
+            ctr: c.ctr, cpc: c.cpc, cpm: c.cpm, frequency: c.frequency, results: c.results,
+            costPerResult: c.costPerResult, revenue: c.revenue, roas: c.roas,
+            leads: c.leads, purchases: c.purchases,
+          }))}
+        />
       </section>
 
       <ExecutiveSummary summary={summary} text={summaryText} />
@@ -167,11 +183,11 @@ export default async function DashboardPage({
         <Panel>
           <PanelHeader title="Platform mix" subtitle="Spend split by publisher" icon={<PieIcon className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-3">
-            <DonutChart data={platformRows} type="currency" code={code} center="Total spend" height={200} />
-            <DonutLegend data={platformRows} type="currency" code={code} className="mt-3" />
+            <DonutChart data={platformRows} type="currency" code={code} center="Total spend" height={200} dimension="publisher_platform" account={data.kpis} />
+            <DonutLegend data={platformRows} type="currency" code={code} className="mt-3" dimension="publisher_platform" account={data.kpis} />
             <div className="mt-4 border-t border-line pt-3">
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-faint">Device</p>
-              <BarList rows={deviceRows} type="currency" code={code} />
+              <BarList rows={deviceRows} type="currency" code={code} dimension="impression_device" account={data.kpis} />
             </div>
           </div>
         </Panel>
@@ -180,11 +196,11 @@ export default async function DashboardPage({
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel>
           <PanelHeader title="Top placements" subtitle="Spend and cost per result by placement" icon={<Layers className="h-4 w-4" />} />
-          <div className="px-5 pb-5 pt-4"><BarList rows={placementRows} type="currency" code={code} /></div>
+          <div className="px-5 pb-5 pt-4"><BarList rows={placementRows} type="currency" code={code} dimension="platform_position" account={data.kpis} /></div>
         </Panel>
         <Panel>
           <PanelHeader title="Top regions" subtitle="Geographic distribution of spend" icon={<Radio className="h-4 w-4" />} />
-          <div className="px-5 pb-5 pt-4"><BarList rows={regionRows} type="currency" code={code} /></div>
+          <div className="px-5 pb-5 pt-4"><BarList rows={regionRows} type="currency" code={code} dimension="region" account={data.kpis} /></div>
         </Panel>
       </section>
 
@@ -198,7 +214,7 @@ export default async function DashboardPage({
           />
           <div className="px-5 pb-5 pt-4">
             {data.hourly.length ? (
-              <Heatmap cells={data.hourly} days={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]} />
+              <Heatmap cells={data.hourly} days={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]} code={code} />
             ) : (
               <EmptyState icon={<Activity className="h-5 w-5" />} title="Hourly breakdown unavailable" description="Meta did not return hourly data for this range." />
             )}
@@ -247,6 +263,22 @@ export default async function DashboardPage({
         </div>
 
         <div className="space-y-4">
+          {discrepancies.length ? (
+            <Panel>
+              <PanelHeader
+                title="Data discrepancies"
+                subtitle={`${discrepancies.length} gap${discrepancies.length === 1 ? "" : "s"} between your ads, pixel and leads`}
+                icon={<Wrench className="h-4 w-4" />}
+              />
+              <div className="px-4 pb-4 pt-3">
+                <DiscrepancyList items={discrepancies.slice(0, 3)} code={code} compact />
+                <Link href="/pixel#discrepancies" className="mt-3 inline-flex items-center gap-1 text-[11px] font-medium text-brand-500 hover:underline">
+                  See all discrepancies & fixes <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            </Panel>
+          ) : null}
+
           <Panel>
             <PanelHeader title="Latest leads" subtitle={`${num(data.leads.length)} in this period`} icon={<UserPlus className="h-4 w-4" />} />
             <div className="space-y-2 px-5 pb-5 pt-4">

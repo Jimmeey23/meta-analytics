@@ -1,5 +1,6 @@
 import * as React from "react";
 import { AppShell } from "@/components/shell/app-shell";
+import { DrilldownHost } from "@/components/panels/drilldown-views";
 import { getSession, isDemo, listAccounts } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       userName={session?.userName ?? ""}
       userPicture={session?.picture}
     >
-      {children}
+      <DrilldownHost>{children}</DrilldownHost>
     </AppShell>
   );
 }

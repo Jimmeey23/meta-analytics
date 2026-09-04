@@ -5,6 +5,7 @@ import { Panel, PanelHeader, EmptyState } from "@/components/ui/primitives";
 import { BarList, DonutChart, DonutLegend, Heatmap, StackedBarChart } from "@/components/charts";
 import { currency, num, pct } from "@/lib/format";
 import { titleCase } from "@/lib/utils";
+import { OpenDrilldown } from "@/components/panels/drilldown-context";
 
 export const dynamic = "force-dynamic";
 
@@ -25,8 +26,8 @@ export default async function AudiencePage({
     return row;
   });
 
-  const platform = (data.breakdowns.publisher_platform?.rows ?? []).map((r) => ({ label: titleCase(r.key), value: r.spend }));
-  const device = (data.breakdowns.impression_device?.rows ?? []).map((r) => ({ label: titleCase(r.key), value: r.spend }));
+  const platform = (data.breakdowns.publisher_platform?.rows ?? []).map((r) => ({ label: titleCase(r.key), value: r.spend, row: r }));
+  const device = (data.breakdowns.impression_device?.rows ?? []).map((r) => ({ label: titleCase(r.key), value: r.spend, row: r }));
   const placement = (data.breakdowns.platform_position?.rows ?? []).slice(0, 10);
   const region = (data.breakdowns.region?.rows ?? []).slice(0, 12);
 
@@ -46,14 +47,14 @@ export default async function AudiencePage({
           <PanelHeader title="Best segments" subtitle="Lowest cost per result" icon={<Target className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             {bestSegments.length ? (
-              <BarList rows={bestSegments.map((r) => ({ label: titleCase(r.key), value: r.results, sub: `${money(r.costPerResult)}/res` }))} type="number" />
+              <BarList rows={bestSegments.map((r) => ({ label: titleCase(r.key), value: r.results, row: r, sub: `${money(r.costPerResult)}/res` }))} type="number" code={code} dimension="age,gender" account={data.kpis} />
             ) : (
               <EmptyState icon={<Target className="h-5 w-5" />} title="Not enough conversion data" />
             )}
             {worstSegments.length ? (
               <>
                 <p className="mt-5 mb-2 text-[10px] font-semibold uppercase tracking-wide text-faint">Most expensive segments</p>
-                <BarList rows={worstSegments.map((r) => ({ label: titleCase(r.key), value: r.costPerResult, sub: `${money(r.spend)} spend`, tone: "linear-gradient(90deg, hsl(var(--neg)), hsl(var(--warn)))" }))} type="currency" code={code} />
+                <BarList rows={worstSegments.map((r) => ({ label: titleCase(r.key), value: r.costPerResult, row: r, sub: `${money(r.spend)} spend`, tone: "linear-gradient(90deg, hsl(var(--neg)), hsl(var(--warn)))" }))} type="currency" code={code} dimension="age,gender" account={data.kpis} />
               </>
             ) : null}
           </div>
@@ -64,24 +65,26 @@ export default async function AudiencePage({
         <Panel>
           <PanelHeader title="Platform" subtitle="Facebook vs Instagram vs Audience Network" icon={<PieIcon className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-3">
-            <DonutChart data={platform} type="currency" code={code} center="Spend" height={200} />
-            <DonutLegend data={platform} type="currency" code={code} className="mt-3" />
+            <DonutChart data={platform} type="currency" code={code} center="Spend" height={200} dimension="publisher_platform" account={data.kpis} />
+            <DonutLegend data={platform} type="currency" code={code} className="mt-3" dimension="publisher_platform" account={data.kpis} />
           </div>
         </Panel>
         <Panel>
           <PanelHeader title="Device" subtitle="Where impressions were served" icon={<Monitor className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-3">
-            <DonutChart data={device} type="currency" code={code} center="Spend" height={200} />
-            <DonutLegend data={device} type="currency" code={code} className="mt-3" />
+            <DonutChart data={device} type="currency" code={code} center="Spend" height={200} dimension="impression_device" account={data.kpis} />
+            <DonutLegend data={device} type="currency" code={code} className="mt-3" dimension="impression_device" account={data.kpis} />
           </div>
         </Panel>
         <Panel>
           <PanelHeader title="Placements" subtitle="Spend and cost per result by slot" icon={<Layers className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             <BarList
-              rows={placement.map((r) => ({ label: titleCase(r.key.replace(" · ", " · ")), value: r.spend, sub: r.results > 0 ? `${money(r.costPerResult)}/res` : undefined }))}
+              rows={placement.map((r) => ({ label: titleCase(r.key.replace(" · ", " · ")), value: r.spend, row: r, sub: r.results > 0 ? `${money(r.costPerResult)}/res` : undefined }))}
               type="currency"
               code={code}
+              dimension="platform_position"
+              account={data.kpis}
             />
           </div>
         </Panel>
@@ -92,9 +95,11 @@ export default async function AudiencePage({
           <PanelHeader title="Geography" subtitle="Top regions by spend" icon={<Globe2 className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             <BarList
-              rows={region.map((r) => ({ label: r.key, value: r.spend, sub: r.results > 0 ? `${money(r.costPerResult)}/res` : undefined }))}
+              rows={region.map((r) => ({ label: r.key, value: r.spend, row: r, sub: r.results > 0 ? `${money(r.costPerResult)}/res` : undefined }))}
               type="currency"
               code={code}
+              dimension="region"
+              account={data.kpis}
             />
           </div>
         </Panel>
@@ -102,7 +107,7 @@ export default async function AudiencePage({
           <PanelHeader title="Results by day & hour" subtitle="Use this to build ad schedules and bid rules" icon={<Timer className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             {data.hourly.length ? (
-              <Heatmap cells={data.hourly} days={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]} />
+              <Heatmap cells={data.hourly} days={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]} code={code} />
             ) : (
               <EmptyState icon={<Timer className="h-5 w-5" />} title="Hourly data unavailable" />
             )}
@@ -144,7 +149,12 @@ export default async function AudiencePage({
             </thead>
             <tbody>
               {ageGender.map((r) => (
-                <tr key={r.key} className="border-t border-line/60 hover:bg-ink/[0.02]">
+                <OpenDrilldown
+                  as="tr"
+                  key={r.key}
+                  className="cursor-pointer border-t border-line/60 hover:bg-ink/[0.02]"
+                  drilldown={{ kind: "segment", payload: { label: titleCase(r.key), dimension: "age,gender", row: r, account: data.kpis, code } }}
+                >
                   <td className="px-4 py-2.5 text-[12px] font-medium">{titleCase(r.key)}</td>
                   <td className="px-3 py-2.5 text-right text-[12px] num">{money(r.spend)}</td>
                   <td className="px-3 py-2.5 text-right text-[12px] num text-muted">{num(r.impressions)}</td>
@@ -155,7 +165,7 @@ export default async function AudiencePage({
                   <td className="px-3 py-2.5 text-right text-[12px] num">{num(r.results)}</td>
                   <td className="px-3 py-2.5 text-right text-[12px] num">{money(r.costPerResult)}</td>
                   <td className="px-3 py-2.5 text-right text-[12px] num">{r.roas > 0 ? `${r.roas.toFixed(2)}×` : "—"}</td>
-                </tr>
+                </OpenDrilldown>
               ))}
             </tbody>
           </table>

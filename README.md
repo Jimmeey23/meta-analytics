@@ -91,7 +91,8 @@ npm start
 
 ### Permissions requested (all read-only)
 
-`ads_read`, `business_management`, `pages_show_list`, `pages_read_engagement`, and `leads_retrieval`.
+`ads_read`, `read_insights`, `business_management`, `pages_show_list`, `pages_read_engagement`,
+`pages_read_user_content`, `leads_retrieval`.
 
 Nothing is ever created, edited or deleted in your ad account.
 

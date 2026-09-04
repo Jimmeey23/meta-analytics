@@ -4,6 +4,7 @@ import { Download, Inbox, Mail, Phone, Search } from "lucide-react";
 import { Avatar, Badge, EmptyState, Panel, PanelHeader } from "@/components/ui/primitives";
 import { dateTime, relative } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useDrilldown } from "./drilldown-context";
 import type { Lead } from "@/lib/types";
 
 export function LeadsExplorer({ leads, forms }: { leads: Lead[]; forms: { id: string; name: string }[] }) {
@@ -12,6 +13,7 @@ export function LeadsExplorer({ leads, forms }: { leads: Lead[]; forms: { id: st
   const [intent, setIntent] = React.useState("ALL");
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [visible, setVisible] = React.useState(40);
+  const { open } = useDrilldown();
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -102,8 +104,13 @@ export function LeadsExplorer({ leads, forms }: { leads: Lead[]; forms: { id: st
             {filtered.slice(0, visible).map((l) => (
               <React.Fragment key={l.id}>
                 <tr
-                  onClick={() => setExpanded(expanded === l.id ? null : l.id)}
+                  role="button"
+                  aria-haspopup="dialog"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open({ kind: "lead", payload: { lead: l } }); } }}
+                  onClick={() => open({ kind: "lead", payload: { lead: l } })}
                   className="cursor-pointer border-t border-line/60 transition hover:bg-ink/[0.02]"
+                  title="Open lead detail"
                 >
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2.5">

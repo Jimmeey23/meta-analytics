@@ -3,15 +3,15 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Activity, BarChart3, ChevronRight, Facebook, LayoutDashboard, Megaphone, Settings, Sparkles,
-  Target, UserPlus, X, Zap,
+  Activity, BarChart3, ChevronRight, Facebook, LayoutDashboard, Megaphone, Settings,
+  Sparkles, Target, UserPlus, X, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, hint: "KPIs, trends & account health" },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, hint: "Advanced metrics & studio breakdown" },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone, hint: "Campaigns, ad sets & ads" },
-  { href: "/analytics", label: "Analytics", icon: BarChart3, hint: "Studio, WoW & MoM drill-downs" },
   { href: "/audience", label: "Audience", icon: Target, hint: "Demographics, placements, timing" },
   { href: "/leads", label: "Leads", icon: UserPlus, hint: "Lead forms & captured leads" },
   { href: "/pixel", label: "Pixel & Events", icon: Activity, hint: "Configuration, events, diagnostics" },

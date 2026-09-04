@@ -7,8 +7,11 @@ import { compact, currency, eventLabel, num, pct, relative } from "@/lib/format"
 import { cn } from "@/lib/utils";
 import type { PixelConfig } from "@/lib/types";
 import { BarList } from "@/components/charts";
+import { stepsForDiagnostic } from "@/lib/discrepancies";
+import { useDrilldown } from "./drilldown-context";
 
 export function PixelEventsTable({ pixel, code }: { pixel: PixelConfig; code: string }) {
+  const { open } = useDrilldown();
   const max = Math.max(...pixel.events.map((e) => e.count), 1);
   return (
     <div className="mt-4 overflow-x-auto">
@@ -25,7 +28,12 @@ export function PixelEventsTable({ pixel, code }: { pixel: PixelConfig; code: st
         </thead>
         <tbody>
           {pixel.events.map((e) => (
-            <tr key={e.event} className="border-t border-line/60 transition hover:bg-ink/[0.02]">
+            <tr
+              key={e.event}
+              onClick={() => open({ kind: "event", payload: { event: e, code } })}
+              className="cursor-pointer border-t border-line/60 transition hover:bg-ink/[0.02]"
+              title={`Open ${e.event} analytics`}
+            >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <span className={cn("h-2 w-2 rounded-full", e.quality === "good" ? "bg-pos" : e.quality === "medium" ? "bg-warn" : "bg-neg")} />
@@ -41,7 +49,15 @@ export function PixelEventsTable({ pixel, code }: { pixel: PixelConfig; code: st
                 {e.delta > 0 ? "+" : ""}{e.delta}%
               </td>
               <td className="px-3 py-2.5">
-                {e.matched > 0 ? <div className="flex items-center gap-2"><div className="h-1.5 w-24 overflow-hidden rounded-full bg-ink/10"><div className={cn("h-full rounded-full", e.matched >= 92 ? "bg-pos" : e.matched >= 85 ? "bg-warn" : "bg-neg")} style={{ width: `${e.matched}%` }} /></div><span className="text-[11px] num text-muted">{e.matched}%</span></div> : <span className="text-[11px] text-faint">Verify in Events Manager</span>}
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-ink/10">
+                    <div
+                      className={cn("h-full rounded-full", e.matched >= 92 ? "bg-pos" : e.matched >= 85 ? "bg-warn" : "bg-neg")}
+                      style={{ width: `${e.matched}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] num text-muted">{e.matched}%</span>
+                </div>
               </td>
               <td className="px-3 py-2.5">
                 {e.trend?.length ? <Sparkline data={e.trend} width={110} height={26} /> : <span className="text-[11px] text-faint">—</span>}
@@ -81,12 +97,21 @@ export function PixelDiagnostics({ pixel }: { pixel: PixelConfig }) {
               {d.value ? <span className="rounded-full bg-ink/5 px-2 py-0.5 text-[10px] text-muted">{d.value}</span> : null}
             </div>
             <p className="mt-0.5 text-[11px] text-muted">{d.detail}</p>
-            {d.status !== "pass" && (d.cause || d.resolution?.length) ? (
-              <details className="mt-2 rounded-lg border border-line/70 bg-surface/60 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-ink">Cause, evidence and exact resolution</summary>
-                {d.cause ? <p className="mt-2 text-[11px] text-muted"><span className="font-semibold text-ink">Cause:</span> {d.cause}</p> : null}
-                {d.evidence ? <p className="mt-1 text-[11px] text-muted"><span className="font-semibold text-ink">Evidence:</span> {d.evidence}</p> : null}
-                {d.resolution?.length ? <ol className="mt-2 space-y-1.5 text-[11px] text-muted">{d.resolution.map((step, index) => <li key={step} className="flex gap-2"><span className="num font-semibold text-brand-500">{index + 1}.</span><span>{step}</span></li>)}</ol> : null}
+            {d.evidence ? <p className="mt-1 text-[11px] text-faint">Evidence: {d.evidence}</p> : null}
+            {d.cause ? <p className="mt-0.5 text-[11px] text-faint">Cause: {d.cause}</p> : null}
+            {d.status !== "pass" ? (
+              <details className="mt-2">
+                <summary className="cursor-pointer select-none text-[11px] font-semibold text-brand-500 hover:underline">
+                  How to fix it
+                </summary>
+                <ol className="mt-1.5 space-y-1">
+                  {(d.resolution?.length ? d.resolution : stepsForDiagnostic(d)).map((step, i) => (
+                    <li key={i} className="flex gap-1.5 text-[11px] text-muted">
+                      <span className="text-faint">{i + 1}.</span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ol>
               </details>
             ) : null}
           </div>
@@ -151,9 +176,9 @@ export function PixelOverview({ pixel, code }: { pixel: PixelConfig; code: strin
   );
 }
 
-export function EventFunnel({ pixel }: { pixel: PixelConfig }) {
+export function EventFunnel({ pixel, code = "USD" }: { pixel: PixelConfig; code?: string }) {
   const rows = pixel.events
     .filter((e) => ["PageView", "ViewContent", "AddToCart", "InitiateCheckout", "Purchase", "Lead", "CompleteRegistration"].includes(e.event))
     .map((e) => ({ label: eventLabel(e.event), value: e.count }));
-  return <BarList rows={rows} type="compact" className="px-5 pb-5 pt-4" />;
+  return <BarList rows={rows} type="compact" className="px-5 pb-5 pt-4" interactive={false} />;
 }

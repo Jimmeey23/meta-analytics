@@ -6,6 +6,8 @@ import {
   ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis, ComposedChart,
 } from "recharts";
 import { cn } from "@/lib/utils";
+import { useDrilldown } from "@/components/panels/drilldown-context";
+import type { BreakdownRow, Kpis } from "@/lib/types";
 import { compact, currency, num, pct, shortDate } from "@/lib/format";
 
 type ValueType = "currency" | "number" | "percent" | "compact" | "ratio";
@@ -113,35 +115,75 @@ export function TrendChart({
 
 /* ───────────────────────── Bar list (pure DOM) ───────────────────────── */
 
+export type BarListRow = {
+  label: string;
+  value: number;
+  sub?: string;
+  tone?: string;
+  /** Full breakdown row, supplied when the bar should open a drill-down. */
+  row?: BreakdownRow;
+};
+
 export function BarList({
   rows, type = "currency", code = "USD", max, className, color,
+  dimension, account, interactive = true,
 }: {
-  rows: { label: string; value: number; sub?: string; tone?: string }[];
-  type?: ValueType; code?: string; max?: number; className?: string; color?: string;
+  rows: BarListRow[];
+  type?: ValueType;
+  code?: string;
+  max?: number;
+  className?: string;
+  color?: string;
+  dimension?: string;
+  account?: Kpis;
+  interactive?: boolean;
 }) {
+  const { open } = useDrilldown();
   const top = max ?? Math.max(...rows.map((r) => r.value), 1);
+  const canDrill = interactive && Boolean(dimension && account && rows.some((r) => r.row));
+
   return (
     <div className={cn("space-y-2.5", className)}>
-      {rows.map((r, i) => (
-        <div key={r.label} className="group">
-          <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
-            <span className="truncate font-medium" title={r.label}>{r.label}</span>
-            <span className="num shrink-0 text-muted">
-              <span className="font-semibold text-ink">{fmt(r.value, type, code)}</span>
-              {r.sub ? <span className="ml-1.5 text-faint">{r.sub}</span> : null}
-            </span>
+      {rows.map((r, i) => {
+        const body = (
+          <div className="group">
+            <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+              <span className={cn("truncate font-medium", canDrill && r.row && "group-hover:text-brand-500")} title={r.label}>
+                {r.label}
+              </span>
+              <span className="num shrink-0 text-muted">
+                <span className="font-semibold text-ink">{fmt(r.value, type, code)}</span>
+                {r.sub ? <span className="ml-1.5 text-faint">{r.sub}</span> : null}
+              </span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-ink/10">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.max(2, (r.value / top) * 100)}%`,
+                  background: r.tone ?? color ?? `linear-gradient(90deg, ${chartColor(i)}, ${chartColor(i + 1)})`,
+                }}
+              />
+            </div>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-ink/10">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${Math.max(2, (r.value / top) * 100)}%`,
-                background: r.tone ?? color ?? `linear-gradient(90deg, ${chartColor(i)}, ${chartColor(i + 1)})`,
-              }}
-            />
-          </div>
-        </div>
-      ))}
+        );
+
+        if (canDrill && r.row) {
+          return (
+            <button
+              key={r.label}
+              onClick={() =>
+                open({ kind: "segment", payload: { label: r.label, dimension, row: r.row, account, code } })
+              }
+              className="block w-full rounded-lg text-left transition hover:bg-ink/[0.03]"
+              title={`Open ${r.label} breakdown`}
+            >
+              {body}
+            </button>
+          );
+        }
+        return <div key={r.label}>{body}</div>;
+      })}
     </div>
   );
 }
@@ -149,9 +191,20 @@ export function BarList({
 /* ───────────────────────── Donut ───────────────────────── */
 
 export function DonutChart({
-  data, height = 260, type = "currency", code = "USD", center,
-}: { data: { label: string; value: number }[]; height?: number; type?: ValueType; code?: string; center?: React.ReactNode }) {
+  data, height = 260, type = "currency", code = "USD", center, dimension, account, interactive = true,
+}: {
+  data: ({ label: string; value: number; row?: BreakdownRow })[];
+  height?: number;
+  type?: ValueType;
+  code?: string;
+  center?: React.ReactNode;
+  dimension?: string;
+  account?: Kpis;
+  interactive?: boolean;
+}) {
+  const { open } = useDrilldown();
   const total = data.reduce((a, b) => a + b.value, 0);
+  const canDrill = interactive && Boolean(dimension && account);
   return (
     <div className="relative" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -159,6 +212,14 @@ export function DonutChart({
           <Pie
             data={data} dataKey="value" nameKey="label" innerRadius="62%" outerRadius="88%"
             paddingAngle={2} stroke="hsl(var(--surface))" strokeWidth={2}
+            onClick={(entry: any) => {
+              if (!canDrill) return;
+              const payload = entry?.payload ?? entry;
+              if (payload?.row) {
+                open({ kind: "segment", payload: { label: payload.label, dimension, row: payload.row, account, code } });
+              }
+            }}
+            className={canDrill ? "cursor-pointer" : undefined}
           >
             {data.map((_, i) => <Cell key={i} fill={chartColor(i)} />)}
           </Pie>
@@ -175,12 +236,25 @@ export function DonutChart({
   );
 }
 
-export function DonutLegend({ data, type = "currency", code = "USD", className }: { data: { label: string; value: number }[]; type?: ValueType; code?: string; className?: string }) {
+export function DonutLegend({
+  data, type = "currency", code = "USD", className, dimension, account,
+}: {
+  data: ({ label: string; value: number; row?: BreakdownRow })[];
+  type?: ValueType; code?: string; className?: string; dimension?: string; account?: Kpis;
+}) {
+  const { open } = useDrilldown();
   const total = data.reduce((a, b) => a + b.value, 0) || 1;
+  const canDrill = Boolean(dimension && account);
   return (
     <ul className={cn("space-y-1.5", className)}>
       {data.map((d, i) => (
-        <li key={d.label} className="flex items-center gap-2 text-xs">
+        <li
+          key={d.label}
+          onClick={() => {
+            if (canDrill && d.row) open({ kind: "segment", payload: { label: d.label, dimension, row: d.row, account, code } });
+          }}
+          className={cn("flex items-center gap-2 rounded-md px-1 py-0.5 text-xs transition", canDrill && d.row && "cursor-pointer hover:bg-ink/5 hover:text-brand-500")}
+        >
           <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: chartColor(i) }} />
           <span className="truncate">{d.label}</span>
           <span className="num ml-auto shrink-0 text-muted">{pct((d.value / total) * 100, 1)}</span>
@@ -257,7 +331,10 @@ export function FunnelChart({ steps, className }: { steps: { label: string; valu
 
 /* ───────────────────────── Heatmap (day × hour) ───────────────────────── */
 
-export function Heatmap({ cells, days, className }: { cells: { day: number; hour: number; value: number }[]; days: string[]; className?: string }) {
+export function Heatmap({
+  cells, days, className, code = "USD", interactive = true,
+}: { cells: { day: number; hour: number; value: number }[]; days: string[]; className?: string; code?: string; interactive?: boolean }) {
+  const { open } = useDrilldown();
   const [hover, setHover] = React.useState<{ day: number; hour: number; value: number } | null>(null);
   const max = Math.max(...cells.map((c) => c.value), 1);
   const grid = React.useMemo(() => {
@@ -291,7 +368,17 @@ export function Heatmap({ cells, days, className }: { cells: { day: number; hour
                       key={h}
                       onMouseEnter={() => setHover({ day: d, hour: h, value: v })}
                       onMouseLeave={() => setHover(null)}
-                      className="h-[14px] flex-1 rounded-[3px] transition-transform hover:scale-110"
+                      onClick={() =>
+                        interactive &&
+                        open({
+                          kind: "time",
+                          payload: {
+                            day: d, hour: h, value: v, dayName: days[d],
+                            total: cells.reduce((a, c) => a + c.value, 0), code,
+                          },
+                        })
+                      }
+                      className={cn("h-[14px] flex-1 rounded-[3px] transition-transform", interactive ? "cursor-pointer hover:scale-125" : "hover:scale-110")}
                       style={{
                         background: v > 0
                           ? `hsl(var(--chart-1) / ${0.08 + alpha * 0.85})`
@@ -314,7 +401,7 @@ export function Heatmap({ cells, days, className }: { cells: { day: number; hour
           <span>High</span>
         </div>
         <div className="h-5 text-[11px] text-muted">
-          {hover ? `${days[hover.day]} · ${hover.hour}:00–${hover.hour}:59 · ${compact(hover.value)} results` : ""}
+          {hover ? `${days[hover.day]} · ${hover.hour}:00–${hover.hour}:59 · ${compact(hover.value)} results · click to drill down` : (interactive ? "Click any cell for the time-window breakdown" : "")}
         </div>
       </div>
     </div>

@@ -39,6 +39,8 @@ export type Kpis = {
   roas: number;
   leads: number;
   purchases: number;
+  /** Conversions credited to ad views (omni − click-through). */
+  purchasesView?: number;
   landingPageViews: number;
   videoViews: number;
   outboundClicks: number;
@@ -90,6 +92,7 @@ export type CampaignRow = {
   engagementRanking?: Ranking;
   conversionRanking?: Ranking;
   trend: number[];
+  /** Studio / location tag parsed from the entity name (used by the advanced analytics view). */
   location?: string;
 };
 

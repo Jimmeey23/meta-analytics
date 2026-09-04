@@ -5,6 +5,7 @@ import { Panel, PanelHeader, Sparkline, EmptyState } from "@/components/ui/primi
 import { MiniStatRow } from "@/components/panels/kpi-grid";
 import { CampaignExplorer, TopCreatives } from "@/components/panels/campaign-explorer";
 import { CreativeGallery } from "@/components/panels/creative-gallery";
+import { OpenDrilldown } from "@/components/panels/drilldown-context";
 import { BubbleScatter, TrendChart } from "@/components/charts";
 import { currency, num, objectiveLabel, pct, rankingLabel, rankingTone } from "@/lib/format";
 import { pctChange, safeDiv, titleCase as tc } from "@/lib/utils";
@@ -12,7 +13,7 @@ import type { AdRow, AdSetRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-function AdSetTable({ rows, code }: { rows: AdSetRow[]; code: string }) {
+function AdSetTable({ rows, code, ads }: { rows: AdSetRow[]; code: string; ads: AdRow[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[820px] border-collapse">
@@ -32,7 +33,16 @@ function AdSetTable({ rows, code }: { rows: AdSetRow[]; code: string }) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.id} className="border-t border-line/60 transition hover:bg-ink/[0.02]">
+            <OpenDrilldown
+              as="tr"
+              key={r.id}
+              className="cursor-pointer border-t border-line/60 transition hover:bg-ink/[0.02]"
+              drilldown={{
+                kind: "entity",
+                payload: { row: r, type: "adset", code, children: ads.filter((a: AdRow) => a.adSetId === r.id) },
+              }}
+              title={`Open ${r.name} details`}
+            >
               <td className="max-w-[240px] truncate px-4 py-2.5 text-[12px] font-medium" title={r.name}>{r.name}</td>
               <td className="max-w-[200px] truncate px-3 py-2.5 text-[11px] text-muted" title={r.campaignName}>{r.campaignName}</td>
               <td className="px-3 py-2.5 text-right text-[12px] num">{currency(r.spend, code, { compact: true })}</td>
@@ -45,7 +55,7 @@ function AdSetTable({ rows, code }: { rows: AdSetRow[]; code: string }) {
               <td className="px-3 py-2.5 text-[11px]">
                 <span className={rankingTone(r.qualityRanking)}>{rankingLabel(r.qualityRanking)}</span>
               </td>
-            </tr>
+            </OpenDrilldown>
           ))}
         </tbody>
       </table>
@@ -54,7 +64,7 @@ function AdSetTable({ rows, code }: { rows: AdSetRow[]; code: string }) {
   );
 }
 
-function AdTable({ rows, code }: { rows: AdRow[]; code: string }) {
+function AdTable({ rows, code, ads, account }: { rows: AdRow[]; code: string; ads: AdRow[]; account: any }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[900px] border-collapse">
@@ -73,7 +83,21 @@ function AdTable({ rows, code }: { rows: AdRow[]; code: string }) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.id} className="border-t border-line/60 transition hover:bg-ink/[0.02]">
+            <OpenDrilldown
+              as="tr"
+              key={r.id}
+              className="cursor-pointer border-t border-line/60 transition hover:bg-ink/[0.02]"
+              drilldown={{
+                kind: "creative",
+                payload: {
+                  ad: r,
+                  code,
+                  account,
+                  siblings: ads.filter((a: AdRow) => a.adSetId === r.adSetId && a.id !== r.id),
+                },
+              }}
+              title="Open creative analysis"
+            >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500">
@@ -101,7 +125,7 @@ function AdTable({ rows, code }: { rows: AdRow[]; code: string }) {
               <td className="px-3 py-2.5 text-right text-[12px] num">{num(r.results)}</td>
               <td className="px-3 py-2.5 text-right text-[12px] num">{currency(r.costPerResult, code, { compact: true })}</td>
               <td className="px-3 py-2.5">{r.trend?.length ? <Sparkline data={r.trend} width={70} height={22} /> : null}</td>
-            </tr>
+            </OpenDrilldown>
           ))}
         </tbody>
       </table>
@@ -138,8 +162,6 @@ export default async function CampaignsPage({
 
       <CampaignExplorer campaigns={data.campaigns} adSets={data.adSets} ads={data.ads} code={code} />
 
-      <CreativeGallery ads={data.ads} code={code} />
-
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel className="xl:col-span-2">
           <PanelHeader title="Spend vs results" subtitle="Daily delivery across all campaigns" icon={<Wallet className="h-4 w-4" />} />
@@ -155,18 +177,27 @@ export default async function CampaignsPage({
         </Panel>
         <Panel>
           <PanelHeader title="Top creatives" subtitle="Ranked by results then CTR" icon={<ImageIcon className="h-4 w-4" />} />
-          <TopCreatives ads={data.ads} code={code} limit={6} />
+          <TopCreatives ads={data.ads} code={code} limit={6} account={data.kpis} />
         </Panel>
       </div>
 
       <Panel>
         <PanelHeader title="Ad sets" subtitle={`${data.adSets.length} ad sets · ranked by spend`} icon={<Layers className="h-4 w-4" />} />
-        <AdSetTable rows={data.adSets.slice(0, 25)} code={code} />
+        <AdSetTable rows={data.adSets.slice(0, 25)} code={code} ads={data.ads} />
       </Panel>
 
       <Panel>
         <PanelHeader title="Ads & creatives" subtitle={`${data.ads.length} ads · ranked by spend`} icon={<ImageIcon className="h-4 w-4" />} />
-        <AdTable rows={data.ads.slice(0, 30)} code={code} />
+        <AdTable rows={data.ads.slice(0, 30)} code={code} ads={data.ads} account={data.kpis} />
+      </Panel>
+
+      <Panel>
+        <PanelHeader
+          title="Creative library"
+          subtitle="Hover a creative to expand its metrics · click to open the full analysis"
+          icon={<ImageIcon className="h-4 w-4" />}
+        />
+        <CreativeGallery ads={data.ads} code={code} account={data.kpis} limit={12} />
       </Panel>
 
       <Panel>

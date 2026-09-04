@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Filter, Image as ImageIcon, Search, Sparkles
 import { Badge, EmptyState, Panel, PanelHeader, Sparkline } from "@/components/ui/primitives";
 import { currency, num, objectiveLabel, pct, rankingLabel, rankingTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { OpenDrilldown, useDrilldown } from "./drilldown-context";
 import type { AdRow, AdSetRow, CampaignRow } from "@/lib/types";
 
 type SortKey = "name" | "spend" | "impressions" | "clicks" | "ctr" | "cpc" | "results" | "costPerResult" | "roas" | "frequency";
@@ -34,6 +35,7 @@ export function CampaignExplorer({
   const [sort, setSort] = React.useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: defaultSort, dir: "desc" });
   const [open, setOpen] = React.useState<Set<string>>(new Set());
   const [openAds, setOpenAds] = React.useState<Set<string>>(new Set());
+  const { open: openDrilldown } = useDrilldown();
 
   const toggle = (set: Set<string>, key: string) => {
     const next = new Set(set);
@@ -80,8 +82,23 @@ export function CampaignExplorer({
       <td className="sticky left-0 z-10 bg-surface/95 px-3 py-2.5 backdrop-blur">
         <div className="flex items-center gap-2" style={{ paddingLeft: depth * 18 }}>
           {extra}
-          <div className="min-w-0">
-            <p className={cn("truncate text-[13px]", depth === 0 ? "font-medium" : "text-muted")} title={row.name}>{row.name}</p>
+          <div
+            className="min-w-0 cursor-pointer"
+            onClick={() =>
+              openDrilldown({
+                kind: "entity",
+                payload: {
+                  row,
+                  type: "campaign",
+                  code,
+                  children: adSetsByCampaign.get(row.id) ?? [],
+                  creatives: ads.filter((a) => (adSetsByCampaign.get(row.id) ?? []).some((s) => s.id === a.adSetId)),
+                },
+              })
+            }
+            title={`Open ${row.name} details`}
+          >
+            <p className={cn("truncate text-[13px] hover:text-brand-500", depth === 0 ? "font-medium" : "text-muted")} title={row.name}>{row.name}</p>
             <p className="truncate text-[10px] text-faint">
               {objectiveLabel(row.objective)}
               {row.budget > 0 ? ` · ${money(row.budget)}/${row.budgetType === "lifetime" ? "total" : "day"}` : ""}
@@ -196,7 +213,23 @@ export function CampaignExplorer({
                                   >
                                     {adOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                                   </button>
-                                  <span className="truncate text-[12px] text-muted" title={s.name}>{s.name}</span>
+                                  <span
+                                    className="truncate text-[12px] text-muted hover:text-brand-500"
+                                    title={`Open ${s.name} details`}
+                                    onClick={() =>
+                                      openDrilldown({
+                                        kind: "entity",
+                                        payload: {
+                                          row: s,
+                                          type: "adset",
+                                          code,
+                                          children: adsByAdSet.get(s.id) ?? [],
+                                        },
+                                      })
+                                    }
+                                  >
+                                    {s.name}
+                                  </span>
                                 </div>
                               </td>
                               <td className="px-3 py-2"><StatusPill status={s.status} /></td>
@@ -224,8 +257,21 @@ export function CampaignExplorer({
                                             <ImageIcon className="h-3.5 w-3.5" />
                                           )}
                                         </div>
-                                        <div className="min-w-0">
-                                          <p className="truncate text-[12px]">{a.creative?.title ?? a.name}</p>
+                                        <div
+                                          className="min-w-0 cursor-pointer"
+                                          onClick={() =>
+                                            openDrilldown({
+                                              kind: "creative",
+                                              payload: {
+                                                ad: a,
+                                                code,
+                                                siblings: (adsByAdSet.get(a.adSetId) ?? []).filter((x) => x.id !== a.id),
+                                              },
+                                            })
+                                          }
+                                          title="Open creative analysis"
+                                        >
+                                          <p className="truncate text-[12px] hover:text-brand-500">{a.creative?.title ?? a.name}</p>
                                           <p className="truncate text-[10px] text-faint">
                                             {a.creative?.format ?? "Ad"}
                                             {a.creative?.cta ? ` · ${a.creative.cta.replace(/_/g, " ").toLowerCase()}` : ""}
@@ -265,13 +311,22 @@ export function CampaignExplorer({
   );
 }
 
-export function TopCreatives({ ads, code, limit = 6 }: { ads: AdRow[]; code: string; limit?: number }) {
+export function TopCreatives({ ads, code, limit = 6, account }: { ads: AdRow[]; code: string; limit?: number; account?: any }) {
+  const { open } = useDrilldown();
   const top = [...ads].filter((a) => a.impressions > 0).sort((a, b) => b.results - a.results || b.ctr - a.ctr).slice(0, limit);
   if (!top.length) return <EmptyState icon={<ImageIcon className="h-5 w-5" />} title="No ad creatives in this period" />;
   return (
     <div className="space-y-3 px-5 pb-5 pt-4">
       {top.map((a) => (
-        <div key={a.id} className="flex items-center gap-3 rounded-xl border border-line/70 p-2.5 transition hover:border-brand-500/40">
+        <OpenDrilldown
+          key={a.id}
+          className="flex cursor-pointer items-center gap-3 rounded-xl border border-line/70 p-2.5 transition hover:border-brand-500/40 hover:bg-ink/[0.02]"
+          title="Open creative analysis"
+          drilldown={{
+            kind: "creative",
+            payload: { ad: a, code, account, siblings: ads.filter((x) => x.adSetId === a.adSetId && x.id !== a.id) },
+          }}
+        >
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-brand-500/25 via-accent/20 to-accent-2/20 text-brand-500">
             {a.creative?.thumbnail ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -293,7 +348,7 @@ export function TopCreatives({ ads, code, limit = 6 }: { ads: AdRow[]; code: str
             <p className="text-[13px] font-semibold num">{currency(a.spend, code, { compact: true })}</p>
             <p className="text-[10px] text-faint">{a.creative?.format ?? "Ad"}</p>
           </div>
-        </div>
+        </OpenDrilldown>
       ))}
     </div>
   );
