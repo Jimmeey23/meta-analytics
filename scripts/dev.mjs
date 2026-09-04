@@ -8,6 +8,10 @@
  */
 import { spawn } from 'node:child_process'
 import net from 'node:net'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const NEXT_BIN = require.resolve('next/dist/bin/next')
 
 const START_PORT = Number(process.env.PORT) || 3000
 const MAX_ATTEMPTS = 50
@@ -39,7 +43,7 @@ if (port !== START_PORT) {
 const child = spawn(
   process.execPath,
   [
-    new URL('../node_modules/next/dist/bin/next', import.meta.url).pathname,
+    NEXT_BIN,
     'dev',
     '-H',
     HOST,
