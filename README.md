@@ -169,3 +169,14 @@ metrics, daily series, campaigns, ad sets, ads, every breakdown, all leads, pixe
 | Old data showing | Settings → **Clear API cache** (5-minute TTL) |
 
 Set `FORCE_DEMO=1` in `.env.local` to keep the app on sample data even while connected — handy for demos.
+
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+`npm run dev` picks the first free port starting at 3000 (override the
+starting point with `PORT`), so multiple instances can run side by side.
+Use `npm run dev:port` to force port 3000 and fail if it is taken.

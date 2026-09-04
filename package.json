@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "dev": "node scripts/dev.mjs",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p 3000",
-    "lint": "next lint"
+    "start": "node scripts/start.mjs",
+    "lint": "next lint",
+    "dev:port": "next dev -H 0.0.0.0 -p 3000"
   },
   "dependencies": {
     "clsx": "2.1.1",
