@@ -2,6 +2,8 @@ import { AlertTriangle } from "lucide-react";
 
 function stepsFor(warning: string) {
   const value = warning.toLowerCase();
+  if (value.includes("rate limit") || value.includes("request limit") || value.includes("requests are paused"))
+    return ["Wait for the cooldown to pass — MetaInsight pauses Graph requests for 60s after Meta reports a limit, then resumes automatically.", "Narrow the date range or pick a single ad account so each refresh reads less.", "If it recurs hourly, raise the app's rate limit tier in developers.facebook.com → App Review, or spread refreshes further apart."];
   if (value.includes("access token") || value.includes("session has expired") || value.includes("code 190"))
     return ["Open Settings and choose Reconnect Meta account — the saved token is no longer valid.", "Approve the permission dialog again so a fresh long-lived token is issued.", "If it fails immediately, confirm META_APP_ID, META_APP_SECRET and META_REDIRECT_URI match the app in developers.facebook.com."];
   if (value.startsWith("meta account:"))

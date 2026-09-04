@@ -8,7 +8,10 @@
     "start": "node scripts/start.mjs",
     "lint": "next lint",
     "dev:port": "next dev -H 0.0.0.0 -p 3000",
-    "check:creative": "node scripts/check-creative-mapping.mjs"
+    "check:creative": "node scripts/check-creative-mapping.mjs",
+    "check:calls": "node scripts/check-call-budget.mjs",
+    "check:limits": "node scripts/check-rate-limits.mjs",
+    "check": "npm run check:creative && npm run check:calls && npm run check:limits"
   },
   "dependencies": {
     "clsx": "2.1.1",

@@ -1,8 +1,9 @@
+import crypto from "node:crypto";
 import type {
   Account, AdRow, AdSetRow, Breakdown, CampaignRow, FunnelStep, Lead, LeadForm,
   PixelConfig, PixelDiagnostic, PixelEvent, Range, ReportData, SeriesPoint,
 } from "./types";
-import { getEdge, getEdgePaged, getInsights, graphRequest } from "./meta";
+import { getEdge, getEdgePaged, getInsights, getManyByIds, graphRequest } from "./meta";
 import { creativeFrom, videoIdsOf } from "./creative";
 import {
   costForAction, deriveKpis, emptyKpis, pickResult, roasFrom, sumActions, sumActionValues,
@@ -44,6 +45,96 @@ async function safe<T>(ctx: Ctx, label: string, fn: () => Promise<T>, fallback: 
     ctx.warnings.push(`${label}: ${redactSecrets(msg)}`);
     return fallback;
   }
+}
+
+/* ────────────────────────── Short-lived caches ────────────────────────── */
+
+/**
+ * Memoises a per-token lookup that changes rarely, keyed on a hash of the
+ * token so the token itself is never used as a map key in memory dumps.
+ */
+const PAGE_TTL = 10 * 60 * 1000;
+const pageCache = new Map<string, { at: number; value: any }>();
+
+async function cachedByToken<T>(
+  store: Map<string, { at: number; value: any }>,
+  token: string,
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = `${label}:${crypto.createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
+  const hit = store.get(key);
+  if (hit && Date.now() - hit.at < PAGE_TTL) return hit.value as T;
+  const value = await fn();
+  store.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/* ─────────────────────── Video source resolution ─────────────────────── */
+
+/** How many video creatives are worth resolving for one report. */
+const VIDEO_LOOKUP_CAP = 60;
+/** Signed `source` URLs outlive this comfortably, so re-use is safe. */
+const VIDEO_TTL = 20 * 60 * 1000;
+const videoCache = new Map<string, { at: number; node: any }>();
+
+/**
+ * Resolves playable sources for the video creatives most worth showing.
+ *
+ * Previously this issued one Graph call per video id and fired them all at
+ * once, which produced thousands of `GET /{video-id}` calls per report and
+ * exhausted the rate limit. Ids are now ranked by ad spend, capped, served
+ * from a short-lived cache, and the remainder fetched 50 at a time.
+ */
+async function resolveVideos(ctx: Ctx, token: string, adMeta: any[], adRows: any[]) {
+  const spendByAd = new Map<string, number>();
+  for (const row of adRows) {
+    const id = String(row.ad_id ?? "");
+    spendByAd.set(id, (spendByAd.get(id) ?? 0) + toNumber(row.spend));
+  }
+
+  // Highest-spending ads first, so the cap keeps what the user actually sees.
+  const ranked = [...adMeta].sort(
+    (a, b) => (spendByAd.get(String(b.id)) ?? 0) - (spendByAd.get(String(a.id)) ?? 0),
+  );
+
+  const wanted: string[] = [];
+  for (const ad of ranked) {
+    for (const id of videoIdsOf(ad.creative)) {
+      if (!wanted.includes(id)) wanted.push(id);
+    }
+    if (wanted.length >= VIDEO_LOOKUP_CAP) break;
+  }
+  const ids = wanted.slice(0, VIDEO_LOOKUP_CAP);
+
+  const now = Date.now();
+  const resolved = new Map<string, any>();
+  const missing: string[] = [];
+  for (const id of ids) {
+    const hit = videoCache.get(id);
+    if (hit && now - hit.at < VIDEO_TTL) resolved.set(id, hit.node);
+    else missing.push(id);
+  }
+
+  if (missing.length) {
+    const fetched = await safe(
+      ctx,
+      "Video creatives",
+      () => getManyByIds(token, missing, "id,source,picture,permalink_url"),
+      new Map<string, any>(),
+    );
+    for (const [id, node] of fetched) {
+      videoCache.set(id, { at: now, node });
+      resolved.set(id, node);
+    }
+  }
+
+  if (wanted.length >= VIDEO_LOOKUP_CAP) {
+    ctx.warnings.push(
+      `Video creatives: resolved playable sources for the top ${VIDEO_LOOKUP_CAP} video ads by spend to stay within Meta's rate limits.`,
+    );
+  }
+  return resolved;
 }
 
 function ranking(v: unknown) {
@@ -158,8 +249,12 @@ async function fetchLeads(ctx: Ctx, token: string, range: Range) {
   // Read the page list on its own. Expanding leadgen_forms inline makes the
   // whole request fail with "(#10) insufficient privileges" as soon as the
   // user lacks Leads Access on any single page, so forms are fetched per page.
-  const pages = await safe<any[]>(ctx, "Pages", () =>
-    getEdge(token, "me", "accounts", { fields: "id,name,access_token", limit: 100 }), []);
+  //
+  // The list barely changes, so it is cached: it used to be re-read on every
+  // report build, once per page view, for no new information.
+  const pages = await cachedByToken(pageCache, token, "Pages", () =>
+    safe<any[]>(ctx, "Pages", () =>
+      getEdge(token, "me", "accounts", { fields: "id,name,access_token", limit: 100 }), []));
 
   const forms: LeadForm[] = [];
   const leads: Lead[] = [];
@@ -376,16 +471,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
 
   const pixelData = await fetchPixel(ctx, token, account.id, range, dailyRows);
 
-  // Resolve playable sources separately so the main ad request remains small.
-  const videoIds = [...new Set(adMeta.flatMap((ad: any) => videoIdsOf(ad.creative)))];
-  const videoRows = await Promise.all(videoIds.map(async (id) => {
-    try {
-      return await graphRequest(id, { fields: "id,source,picture,permalink_url" }, token);
-    } catch {
-      return null;
-    }
-  }));
-  const videoById = new Map(videoRows.filter(Boolean).map((video: any) => [String(video.id), video]));
+  const videoById = await resolveVideos(ctx, token, adMeta, adRows);
 
   const series = seriesFrom(dailyRows);
   const prevSeries = seriesFrom(prevRows);
