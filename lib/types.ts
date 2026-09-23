@@ -170,8 +170,14 @@ export type PixelEvent = {
   value?: number;
   trend: number[];
   delta: number;
-  matched: number;   // % matched to a Meta user
+  /** Event match quality is not returned by every Graph endpoint. */
+  matched?: number;
   quality?: "good" | "medium" | "low";
+  source: "pixel_stats" | "ads_insights" | "demo";
+  sourceLabel: string;
+  reportingBasis: string;
+  periodStart: string;
+  periodEnd: string;
 };
 
 export type PixelDiagnostic = {

@@ -22,7 +22,7 @@ export function PixelEventsTable({ pixel, code }: { pixel: PixelConfig; code: st
             <th className="px-3 py-2 text-right font-semibold">Count</th>
             <th className="px-3 py-2 text-right font-semibold">Value</th>
             <th className="px-3 py-2 text-right font-semibold">Change</th>
-            <th className="px-3 py-2 font-semibold">Match quality</th>
+            <th className="px-3 py-2 font-semibold">Data source</th>
             <th className="px-3 py-2 font-semibold">Last 14 days</th>
           </tr>
         </thead>
@@ -36,7 +36,7 @@ export function PixelEventsTable({ pixel, code }: { pixel: PixelConfig; code: st
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
-                  <span className={cn("h-2 w-2 rounded-full", e.quality === "good" ? "bg-pos" : e.quality === "medium" ? "bg-warn" : "bg-neg")} />
+                  <span className={cn("h-2 w-2 rounded-full", e.source === "pixel_stats" ? "bg-pos" : e.source === "demo" ? "bg-warn" : "bg-brand-500")} />
                   <div>
                     <p className="text-[13px] font-medium">{eventLabel(e.event)}</p>
                     <p className="text-[10px] text-faint">{e.event}</p>
@@ -49,15 +49,8 @@ export function PixelEventsTable({ pixel, code }: { pixel: PixelConfig; code: st
                 {e.delta > 0 ? "+" : ""}{e.delta}%
               </td>
               <td className="px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-ink/10">
-                    <div
-                      className={cn("h-full rounded-full", e.matched >= 92 ? "bg-pos" : e.matched >= 85 ? "bg-warn" : "bg-neg")}
-                      style={{ width: `${e.matched}%` }}
-                    />
-                  </div>
-                  <span className="text-[11px] num text-muted">{e.matched}%</span>
-                </div>
+                <p className="max-w-[180px] truncate text-[11px] text-muted" title={e.sourceLabel}>{e.sourceLabel}</p>
+                {typeof e.matched === "number" ? <p className="text-[10px] text-faint">EMQ {e.matched}%</p> : null}
               </td>
               <td className="px-3 py-2.5">
                 {e.trend?.length ? <Sparkline data={e.trend} width={110} height={26} /> : <span className="text-[11px] text-faint">—</span>}

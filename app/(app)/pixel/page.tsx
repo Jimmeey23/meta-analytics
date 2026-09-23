@@ -214,9 +214,22 @@ export default async function PixelPage({
               <PanelHeader title="Signal quality" subtitle="How much of your data Meta can actually use" icon={<Gauge className="h-4 w-4" />} />
               <div className="space-y-3 px-5 pb-5 pt-4">
                 {(() => {
-                  const totalEvents = sum(pixel.events.map((e) => e.count));
-                  const weighted = sum(pixel.events.map((e) => e.count * e.matched)) / Math.max(totalEvents, 1);
-                  const unmatched = totalEvents - sum(pixel.events.map((e) => (e.count * e.matched) / 100));
+                  const measuredEvents = pixel.events.filter((e) => typeof e.matched === "number");
+                  const totalEvents = sum(measuredEvents.map((e) => e.count));
+                  const weighted = totalEvents
+                    ? sum(measuredEvents.map((e) => e.count * (e.matched ?? 0))) / totalEvents
+                    : null;
+                  const unmatched = totalEvents
+                    ? totalEvents - sum(measuredEvents.map((e) => (e.count * (e.matched ?? 0)) / 100))
+                    : null;
+                  if (weighted === null || unmatched === null) {
+                    return (
+                      <div className="rounded-xl border border-line/70 bg-ink/[0.02] p-3 text-[12px] text-muted">
+                        <p className="font-medium text-ink">Event Match Quality is not available from this API response.</p>
+                        <p className="mt-1">Open Meta Events Manager → Data sources → Overview to review EMQ for each event. This dashboard will not estimate it.</p>
+                      </div>
+                    );
+                  }
                   return (
                     <>
                       <div>

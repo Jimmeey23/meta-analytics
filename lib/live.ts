@@ -301,7 +301,7 @@ async function fetchLeads(ctx: Ctx, token: string, range: Range) {
 
 /* ─────────────────────────── Pixel ─────────────────────────── */
 
-function eventsFromActions(series: SeriesPoint[], rows: any[]): PixelEvent[] {
+function eventsFromActions(rows: any[], range: Range): PixelEvent[] {
   const counts: Record<string, { count: number; value: number; trend: number[] }> = {};
   const daily: Record<string, number[]> = {};
   for (const row of rows) {
@@ -338,11 +338,14 @@ function eventsFromActions(series: SeriesPoint[], rows: any[]): PixelEvent[] {
       const firstHalf = sum(trend.slice(0, half)) || 1;
       const secondHalf = sum(trend.slice(half));
       const delta = trend.length > 3 ? ((secondHalf - firstHalf) / firstHalf) * 100 : 0;
-      const matched = event === "Purchase" ? 92 : event === "Lead" ? 95 : event === "PageView" ? 88 : 82;
       return {
         event, label: event, count: v.count, value: v.value || undefined, trend,
-        delta: Math.round(delta * 10) / 10, matched,
-        quality: matched >= 92 ? ("good" as const) : matched >= 86 ? ("medium" as const) : ("low" as const),
+        delta: Math.round(delta * 10) / 10,
+        source: "ads_insights" as const,
+        sourceLabel: "Meta Ads Insights attributed actions",
+        reportingBasis: "Events attributed to ads under the account attribution settings; not total website event volume.",
+        periodStart: range.since,
+        periodEnd: range.until,
       };
     });
 }
@@ -371,7 +374,7 @@ async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Ran
     return json;
   }, null);
 
-  let events = eventsFromActions([], dailyRows);
+  let events = eventsFromActions(dailyRows, range);
   if (stats?.data?.length) {
     // aggregation=event returns buckets whose own `data` array holds the
     // per-event rows; older shapes put those rows at the top level.
@@ -383,8 +386,23 @@ async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Ran
       const count = Number(row.count ?? row.total ?? 0);
       if (!name || typeof name !== "string" || !count) continue;
       const existing = events.find((e) => e.event === name);
-      if (existing) existing.count = Math.max(existing.count, count);
-      else events.unshift({ event: name, label: name, count, trend: [], delta: 0, matched: 85, quality: "medium" });
+      if (existing) {
+        existing.count = count;
+        existing.source = "pixel_stats";
+        existing.sourceLabel = "Meta Pixel statistics";
+        existing.reportingBasis = "Total events received by this Meta data source for the selected period.";
+      } else events.unshift({
+        event: name,
+        label: name,
+        count,
+        trend: [],
+        delta: 0,
+        source: "pixel_stats",
+        sourceLabel: "Meta Pixel statistics",
+        reportingBasis: "Total events received by this Meta data source for the selected period.",
+        periodStart: range.since,
+        periodEnd: range.until,
+      });
     }
   }
 

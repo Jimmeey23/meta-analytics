@@ -466,7 +466,19 @@ export function buildDemoData(accountId: string, range: Range, accountName = "No
     const count = Math.max(0, Math.round(base * (0.92 + rnd() * 0.2)));
     const trend = Array.from({ length: 14 }, (_, i) => Math.round((count / 14) * (0.7 + rnd() * 0.7) * (1 + i * 0.01)));
     const quality: PixelEvent["quality"] = match > 0.92 ? "good" : match > 0.86 ? "medium" : "low";
-    return { event, label: event, count, value: event === "Purchase" ? Math.round(count * 2310) : undefined, trend, delta: Math.round((rnd() * 46 - 14) * 10) / 10, matched: Math.round(match * 100), quality };
+    return {
+      event, label: event, count,
+      value: event === "Purchase" ? Math.round(count * 2310) : undefined,
+      trend,
+      delta: Math.round((rnd() * 46 - 14) * 10) / 10,
+      matched: Math.round(match * 100),
+      quality,
+      source: "demo",
+      sourceLabel: "Demonstration dataset",
+      reportingBasis: "Illustrative event volume generated for product demonstration; not connected to a Meta data source.",
+      periodStart: range.since,
+      periodEnd: range.until,
+    };
   });
 
   const diagnostics: PixelDiagnostic[] = [

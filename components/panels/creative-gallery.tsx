@@ -1,9 +1,10 @@
 "use client";
 import * as React from "react";
 import {
-  Image as ImageIcon, Maximize2, MousePointerClick, Play, Search,
+  Image as ImageIcon, Maximize2, MousePointerClick, Search,
 } from "lucide-react";
 import { Badge, EmptyState } from "@/components/ui/primitives";
+import { CreativeMedia } from "@/components/ui/creative-media";
 import { useDrilldown } from "./drilldown-context";
 import { currency, num, pct, rankingLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -12,66 +13,6 @@ import type { AdRow, Kpis } from "@/lib/types";
 function mediaType(ad: AdRow) {
   return ad.creative?.videoId || ad.creative?.videoUrl || /video|reel/i.test(ad.creative?.format ?? "")
     ? "Video" : "Image";
-}
-
-/**
- * Creative preview that plays the real video on hover when Meta returned a
- * playable source, and otherwise shows the thumbnail or the ad copy.
- *
- * `hovered` is driven by the card so the whole tile is the hover target; the
- * video stays muted and control-less because it sits inside the card button.
- */
-function CreativePreview({ ad, hovered }: { ad: AdRow; hovered: boolean }) {
-  const ref = React.useRef<HTMLVideoElement>(null);
-  const [failed, setFailed] = React.useState(false);
-  const src = ad.creative?.videoUrl;
-  const poster = ad.creative?.thumbnail ?? ad.creative?.imageUrl;
-  const playable = Boolean(src) && !failed;
-
-  React.useEffect(() => {
-    const el = ref.current;
-    if (!el || !playable) return;
-    if (hovered) {
-      el.play().catch(() => {/* autoplay refused — poster stays visible */});
-    } else {
-      el.pause();
-      el.currentTime = 0;
-    }
-  }, [hovered, playable]);
-
-  if (playable) {
-    return (
-      <video
-        ref={ref}
-        src={src}
-        poster={poster}
-        muted
-        loop
-        playsInline
-        preload="metadata"
-        onError={() => setFailed(true)}
-        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-      />
-    );
-  }
-  if (poster) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={poster}
-        alt=""
-        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-      />
-    );
-  }
-  return (
-    <div className="grid h-full w-full place-items-center p-5 text-center">
-      <div>
-        <p className="text-[15px] font-semibold leading-snug text-ink">{ad.creative?.title ?? ad.name}</p>
-        <p className="mt-2 line-clamp-3 text-[11px] text-muted">{ad.creative?.body}</p>
-      </div>
-    </div>
-  );
 }
 
 export function CreativeGallery({
@@ -87,7 +28,6 @@ export function CreativeGallery({
   const [query, setQuery] = React.useState("");
   const [format, setFormat] = React.useState("All");
   const [studio, setStudio] = React.useState("All studios");
-  const [hoveredId, setHoveredId] = React.useState<string | null>(null);
 
   const items = React.useMemo(
     () => ads.filter((a) => a.spend > 0 || a.impressions > 0),
@@ -164,15 +104,10 @@ export function CreativeGallery({
             const conv = (ad.leads ?? 0) + (ad.purchases ?? 0);
             const siblings = ads.filter((s) => s.adSetId === ad.adSetId && s.id !== ad.id);
             const isVideo = mediaType(ad) === "Video";
-            const hovered = hoveredId === ad.id;
             return (
               <div
                 key={ad.id}
                 className="group relative z-0 hover:z-30"
-                onMouseEnter={() => setHoveredId(ad.id)}
-                onMouseLeave={() => setHoveredId((id) => (id === ad.id ? null : id))}
-                onFocus={() => setHoveredId(ad.id)}
-                onBlur={() => setHoveredId((id) => (id === ad.id ? null : id))}
               >
                 <button
                   onClick={() => open({ kind: "creative", payload: { ad, code, account, siblings } })}
@@ -181,20 +116,14 @@ export function CreativeGallery({
                   <div className="overflow-hidden rounded-2xl border border-line/70 bg-surface transition-all duration-300 group-hover:-translate-y-1 group-hover:border-brand-500/40 group-hover:shadow-lift">
                     {/* preview */}
                     <div className="relative aspect-[4/3] w-full overflow-hidden bg-gradient-to-br from-brand-500/25 via-accent/20 to-accent-2/20">
-                      <CreativePreview ad={ad} hovered={hovered} />
+                      <CreativeMedia
+                        ad={ad}
+                        showVideoBadge
+                        imageClassName="transition-transform duration-300 group-hover:scale-105"
+                      />
                       <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] font-medium text-white backdrop-blur">
                         {ad.creative?.format ?? (isVideo ? "Video" : "Image")}
                       </span>
-                      {isVideo ? (
-                        <span className={cn(
-                          "absolute inset-0 grid place-items-center transition-opacity duration-300",
-                          hovered && ad.creative?.videoUrl ? "opacity-0" : "opacity-100",
-                        )}>
-                          <span className="grid h-10 w-10 place-items-center rounded-full bg-black/65 text-white">
-                            <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
-                          </span>
-                        </span>
-                      ) : null}
                       <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-md bg-black/45 text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
                         <Maximize2 className="h-3.5 w-3.5" />
                       </span>
@@ -256,12 +185,7 @@ export function CreativeGallery({
 export function CreativeThumb({ ad, className }: { ad: AdRow; className?: string }) {
   return (
     <div className={cn("grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500", className)}>
-      {ad.creative?.thumbnail || ad.creative?.imageUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={ad.creative.thumbnail ?? ad.creative.imageUrl} alt="" className="h-12 w-12 object-cover" />
-      ) : (
-        <ImageIcon className="h-5 w-5" />
-      )}
+      <CreativeMedia ad={ad} />
     </div>
   );
 }

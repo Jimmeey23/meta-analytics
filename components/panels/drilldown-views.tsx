@@ -8,6 +8,7 @@ import {
   Lightbulb, MousePointerClick, Target, TrendingUp, Users,
 } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
+import { CreativeMedia } from "@/components/ui/creative-media";
 import { DrilldownProvider, useDrilldown, type Drilldown } from "./drilldown-context";
 import { Badge, Delta, Panel, Sparkline, KeyValue, ProgressBar } from "@/components/ui/primitives";
 import { compact, currency, dateTime, num, pct, rankingLabel, rankingTone, relative, shortDate } from "@/lib/format";
@@ -324,25 +325,7 @@ function CreativeView({ p }: { p: any }) {
         <div className="rounded-2xl border border-line/70 bg-gradient-to-br from-brand-500/10 via-accent/5 to-transparent p-4">
           <div className="mx-auto w-full max-w-[280px] overflow-hidden rounded-2xl border border-line bg-surface shadow-soft">
             <div className="relative aspect-square w-full bg-gradient-to-br from-brand-500/30 via-accent/25 to-accent-2/20">
-              {ad.creative?.videoUrl ? (
-                <video
-                  src={ad.creative.videoUrl}
-                  poster={ad.creative.thumbnail}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  className="h-full w-full bg-black object-contain"
-                />
-              ) : ad.creative?.thumbnail ? (
-                <img src={ad.creative.thumbnail} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <div className="grid h-full w-full place-items-center p-5 text-center">
-                  <div>
-                    <p className="text-[15px] font-semibold leading-snug">{ad.creative?.title ?? ad.name}</p>
-                    <p className="mt-2 text-[11px] text-muted line-clamp-4">{ad.creative?.body ?? "Creative preview"}</p>
-                  </div>
-                </div>
-              )}
+              <CreativeMedia ad={ad} playVideo controls />
             </div>
             <div className="space-y-1.5 p-3">
               <p className="text-[11px] font-semibold">{ad.creative?.title ?? ad.name}</p>
@@ -538,12 +521,13 @@ function LeadView({ p }: { p: any }) {
 
 function EventView({ p }: { p: any }) {
   const e = p.event;
+  const hasMatchQuality = typeof e.matched === "number";
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
         <p className="num text-3xl font-semibold">{num(e.count)}</p>
         <Delta value={e.delta} />
-        <Badge tone={e.quality === "good" ? "pos" : e.quality === "medium" ? "warn" : "neg"}>{e.quality} match quality</Badge>
+        <Badge tone={e.source === "pixel_stats" ? "pos" : e.source === "demo" ? "warn" : "info"}>{e.sourceLabel}</Badge>
       </div>
 
       <div className="mt-4">
@@ -551,7 +535,7 @@ function EventView({ p }: { p: any }) {
           items={[
             { label: "Events", value: num(e.count) },
             { label: "Change", value: `${e.delta > 0 ? "+" : ""}${e.delta}%` },
-            { label: "Match quality", value: `${e.matched}%` },
+            { label: "Event match quality", value: hasMatchQuality ? `${e.matched}%` : "Not provided" },
             { label: "Value", value: e.value ? currency(e.value, p.code, { compact: true }) : "—" },
           ]}
         />
@@ -580,18 +564,21 @@ function EventView({ p }: { p: any }) {
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-line/70 bg-ink/[0.02] p-3">
-          <SectionTitle>What this event means</SectionTitle>
-          <p className="text-[12px] text-muted">
-            {e.event} fires {num(e.count)} times in the selected period. Meta can match {e.matched}% of these events to a logged-in person;
-            the remaining {100 - e.matched}% cannot be attributed to an ad and will never appear in your results.
-          </p>
+          <SectionTitle>Reporting details</SectionTitle>
+          <dl className="space-y-2 text-[12px]">
+            <div><dt className="text-faint">Exact event key</dt><dd className="font-medium">{e.event}</dd></div>
+            <div><dt className="text-faint">Source</dt><dd className="font-medium">{e.sourceLabel}</dd></div>
+            <div><dt className="text-faint">Selected period</dt><dd className="font-medium">{e.periodStart} to {e.periodEnd}</dd></div>
+            <div><dt className="text-faint">Count basis</dt><dd className="leading-relaxed text-muted">{e.reportingBasis}</dd></div>
+          </dl>
         </div>
         <div className="rounded-xl border border-line/70 bg-ink/[0.02] p-3">
-          <SectionTitle>Improve it</SectionTitle>
+          <SectionTitle>Tracking guidance</SectionTitle>
           <ul className="space-y-1.5 text-[12px] text-muted">
             <li>• Send value and currency with every {e.event} event.</li>
-            <li>• Pass hashed email/phone and external_id to raise match quality above 90%.</li>
-            {e.matched < 90 ? <li>• Enable Automatic Advanced Matching in Events Manager.</li> : null}
+            <li>• Pass consented customer information such as hashed email/phone and external_id where applicable.</li>
+            {!hasMatchQuality ? <li>• Event Match Quality is not exposed by this API response; verify it in Meta Events Manager.</li> : null}
+            {hasMatchQuality && e.matched < 90 ? <li>• Review Automatic Advanced Matching in Events Manager.</li> : null}
             <li>• Mirror the event server-side via Conversions API using a shared event_id.</li>
           </ul>
         </div>

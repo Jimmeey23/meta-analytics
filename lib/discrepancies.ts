@@ -285,7 +285,9 @@ export function findDiscrepancies(data: ReportData): Discrepancy[] {
   }
 
   /* 9 ── Event match quality ─────────────────────────────────── */
-  const weak = (pixel?.events ?? []).filter((e) => e.matched < 88 && e.count > 0);
+  const weak = (pixel?.events ?? []).filter(
+    (e): e is typeof e & { matched: number } => typeof e.matched === "number" && e.matched < 88 && e.count > 0,
+  );
   if (weak.length) {
     const worst = weak.sort((a, b) => a.matched - b.matched)[0];
     out.push({
