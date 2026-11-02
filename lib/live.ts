@@ -3,7 +3,7 @@ import type {
   Account, AdRow, AdSetRow, Breakdown, CampaignRow, FunnelStep, Lead, LeadForm,
   PixelConfig, PixelDiagnostic, PixelEvent, Range, ReportData, SeriesPoint,
 } from "./types";
-import { getAdImages, getEdge, getEdgePaged, getInsights, getManyByIds, graphRequest, graphUsage } from "./meta";
+import { getAdImages, getEdgePaged, getInsights, getManyByIds, graphRequest, graphUsage, rateLimitCooldownMs } from "./meta";
 import { creativeFrom, imageHashesOf, videoIdsOf } from "./creative";
 import {
   costForAction, deriveKpis, emptyKpis, firstAction, pickResult, roasFrom, sumActions, sumActionValues,
@@ -60,6 +60,10 @@ async function safe<T>(ctx: Ctx, label: string, fn: () => Promise<T>, fallback: 
  */
 const PAGE_TTL = 30 * 60 * 1000;
 const pageCache = new ReportCache<any>({ maxEntries: 64, ttlMs: PAGE_TTL });
+const leadCache = new ReportCache<any>({ maxEntries: 512, ttlMs: 5 * 60 * 1000, staleMs: 25 * 60 * 1000 });
+const pixelCache = new ReportCache<any>({ maxEntries: 64, ttlMs: PAGE_TTL, staleMs: 24 * 60 * 60 * 1000 });
+
+const tokenScope = (token: string) => crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
 
 async function cachedByToken<T>(
   store: ReportCache<any>,
@@ -67,8 +71,23 @@ async function cachedByToken<T>(
   label: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const key = `${label}:${crypto.createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
-  return store.read(key, fn);
+  return store.read(`${tokenScope(token)}:${label}`, fn);
+}
+
+/** Refresh/logout must drop derived live caches as well as the report cache. */
+export function clearLiveCaches(token?: string | null) {
+  if (!token) {
+    pageCache.clear();
+    leadCache.clear();
+    pixelCache.clear();
+    videoCache.clear();
+    return;
+  }
+  const prefix = `${tokenScope(token)}:`;
+  pageCache.clear(prefix);
+  leadCache.clear(prefix);
+  pixelCache.clear(prefix);
+  videoCache.clear(prefix);
 }
 
 /* ─────────────────────── Video source resolution ─────────────────────── */
@@ -255,45 +274,62 @@ function mapLead(row: any, formName: string, formId: string): Lead {
 async function fetchLeads(ctx: Ctx, token: string, range: Range) {
   const since = Math.floor(Date.parse(`${range.since}T00:00:00Z`) / 1000);
   const until = Math.floor(Date.parse(`${range.until}T23:59:59Z`) / 1000);
-  // Read the page list on its own. Expanding leadgen_forms inline makes the
-  // whole request fail with "(#10) insufficient privileges" as soon as the
-  // user lacks Leads Access on any single page, so forms are fetched per page.
-  //
-  // The list barely changes, so it is cached: it used to be re-read on every
-  // report build, once per page view, for no new information.
+
+  // Page and form lists are cached, but lead rows are cached per form + range.
+  // This lets a refresh resume complete lead capture without re-reading every
+  // form from scratch, and it avoids the old arbitrary "12 largest forms" cap.
   const pages = await cachedByToken(pageCache, token, "Pages", () =>
     safe<any[]>(ctx, "Pages", () =>
-      getEdge(token, "me", "accounts", { fields: "id,name,access_token", limit: 100 }), []));
+      getEdgePaged(token, "me", "accounts", { fields: "id,name,access_token" }, { limit: 100, max: 1000, maxPages: 10 }), []));
 
-  const pageForms = await mapLimit(pages, 3, async (page) => {
+  const pageForms = await mapLimit(pages, 2, async (page) => {
     const pageToken = (page.access_token as string) || token;
     const rows = await safe<any[]>(ctx, `Lead forms (${page.name ?? page.id})`, () =>
       cachedByToken(pageCache, token, `Forms:${page.id}`, () =>
         getEdgePaged(pageToken, String(page.id), "leadgen_forms", {
           fields: "id,name,status,leads_count,created_time,locale,questions{id,label,type}",
-        }, { limit: 50, max: 200 })), []);
-    return { page, rows };
+        }, { limit: 50, max: 1000, maxPages: 20 })), []);
+    if ((rows as any)?.truncated) ctx.warnings.push(`Lead forms (${page.name ?? page.id}): Meta returned a partial form list. ${(rows as any).error ?? "Retry after the current rate-limit cooldown."}`);
+    return { page, rows: rows ?? [] };
   });
-  const forms: (LeadForm & { pageToken: string })[] = pageForms.flatMap(({ page, rows }) => rows.map((form) => ({
+
+  const forms: (LeadForm & { pageToken: string })[] = pageForms.flatMap(({ page, rows }) => rows.map((form: any) => ({
     id: String(form.id), name: form.name ?? "Untitled form", status: form.status ?? "ACTIVE",
     leadsCount: Number(form.leads_count ?? 0), pageId: String(page.id), pageName: page.name ?? "Page",
     pageToken: (page.access_token as string) || token,
     locale: form.locale, createdTime: form.created_time, questionsCount: form.questions?.data?.length,
   })));
-  // Prioritise forms with leads rather than whichever six happened to come first.
-  const candidates = forms.filter((f) => f.leadsCount > 0).sort((a, b) => b.leadsCount - a.leadsCount).slice(0, 12);
-  const batches = await mapLimit(candidates, 3, async (form) => safe<any[]>(ctx, `Leads (${form.name})`, () =>
-    getEdgePaged(form.pageToken!, form.id, "leads", {
-      fields: "id,created_time,ad_id,ad_name,adset_name,campaign_id,campaign_name,form_id,platform,is_organic,field_data",
-      filtering: [{ field: "time_created", operator: "GREATER_THAN", value: since }, { field: "time_created", operator: "LESS_THAN", value: until }],
-    }, { limit: 200, max: 2000 }), []));
-  const leads = batches.flatMap((rows, i) => rows.map((row) => mapLead(row, candidates[i].name, candidates[i].id)));
-  if (forms.length > candidates.length) ctx.warnings.push(`Lead capture: loaded the 12 largest forms of ${forms.length}; narrow the date range or use Meta's lead export for a complete audit.`);
+
+  // Fetch every form that reports leads, not just the largest dozen. Keep the
+  // fan-out small and stop scheduling new forms once Meta opens a cooldown.
+  const candidates = forms.filter((f) => f.leadsCount > 0).sort((a, b) => b.leadsCount - a.leadsCount);
+  let deferred = 0;
+  let truncatedForms = 0;
+  const batches = await mapLimit(candidates, 2, async (form) => {
+    const cacheKey = `Leads:${form.id}:${since}:${until}`;
+    if (rateLimitCooldownMs() > 0) {
+      const hit = leadCache.peek(`${tokenScope(token)}:${cacheKey}`);
+      if (hit?.value) return hit.value;
+      deferred++;
+      return [];
+    }
+    const rows = await safe<any[]>(ctx, `Leads (${form.name})`, () =>
+      cachedByToken(leadCache, token, cacheKey, () =>
+        getEdgePaged(form.pageToken!, form.id, "leads", {
+          fields: "id,created_time,ad_id,ad_name,adset_name,campaign_id,campaign_name,form_id,platform,is_organic,field_data",
+          filtering: [{ field: "time_created", operator: "GREATER_THAN", value: since }, { field: "time_created", operator: "LESS_THAN", value: until }],
+        }, { limit: 200, max: 10000, maxPages: 50 })), []);
+    if ((rows as any)?.truncated) truncatedForms++;
+    return rows ?? [];
+  });
+
+  const leads = batches.flatMap((rows, i) => rows.map((row: any) => mapLead(row, candidates[i].name, candidates[i].id)));
+  if (deferred > 0) ctx.warnings.push(`Lead capture: ${deferred} of ${candidates.length} lead-bearing forms were deferred while Meta requests are paused. Refresh after the cooldown to finish the sync; cached forms are retained.`);
+  if (truncatedForms > 0) ctx.warnings.push(`Lead capture: ${truncatedForms} form lead lists were truncated by Meta. Narrow the date range or use Meta's lead export for a complete audit.`);
   leads.sort((a, b) => (a.createdTime < b.createdTime ? 1 : -1));
-  if (leads.length > 2000) ctx.warnings.push("Lead capture: showing the newest 2,000 leads. Export a narrower period for a complete lead audit.");
   return {
     forms: forms.map(({ pageToken, ...form }) => form),
-    leads: leads.slice(0, 2000),
+    leads,
   };
 }
 
@@ -349,11 +385,26 @@ function eventsFromActions(rows: any[], range: Range): PixelEvent[] {
 }
 
 async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Range, dailyRows: any[]) {
-  const pixels = await safe<any[]>(ctx, "Pixels", () =>
-    getEdge(token, accountId, "adspixels", {
-      fields: "id,name,last_fired_time,code,creation_time,enable_automatic_matching,automatic_matching_fields,is_created_by_business",
-      limit: 25,
-    }), []);
+  const listKey = `Pixels:${accountId}`;
+  let pixels: any[] = [];
+
+  // Pixel diagnostics are optional enrichment. If Meta has already opened a
+  // cooldown, do not spend another call discovering the same limit; serve a
+  // cached pixel list when possible and defer the rest until the next refresh.
+  if (rateLimitCooldownMs() > 0) {
+    const hit = pixelCache.peek(`${tokenScope(token)}:${listKey}`);
+    if (hit?.value) pixels = hit.value;
+    else {
+      ctx.warnings.push("Pixels: pixel diagnostics were deferred while Meta requests are paused. Refresh after the cooldown to load them.");
+      return { pixel: null, pixels: [] };
+    }
+  } else {
+    pixels = await safe<any[]>(ctx, "Pixels", () =>
+      cachedByToken(pixelCache, token, listKey, () =>
+        getEdgePaged(token, accountId, "adspixels", {
+          fields: "id,name,last_fired_time,code,creation_time,enable_automatic_matching,automatic_matching_fields,is_created_by_business",
+        }, { limit: 25, max: 100, maxPages: 4 })), []);
+  }
 
   const list = pixels.map((p) => ({ id: String(p.id), name: p.name ?? "Pixel", lastFiredTime: p.last_fired_time ?? null }));
   if (!pixels.length) return { pixel: null, pixels: list };
@@ -362,20 +413,21 @@ async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Ran
   const start = Math.floor(Date.parse(`${range.since}T00:00:00Z`) / 1000);
   const end = Math.floor(Date.parse(`${range.until}T23:59:59Z`) / 1000);
 
-  // Best-effort: dedicated pixel statistics edge (available to most ad accounts).
-  const stats = await safe<any>(ctx, "Pixel stats", async () => {
-    const json = await graphRequest(
-      `${primary.id}/stats`,
-      { start_time: start, end_time: end, aggregation: "event" },
-      token,
-    );
-    return json;
-  }, null);
+  let stats: any = null;
+  if (rateLimitCooldownMs() === 0) {
+    stats = await safe<any>(ctx, "Pixel stats", () =>
+      cachedByToken(pixelCache, token, `PixelStats:${primary.id}:${range.since}:${range.until}`, async () => {
+        const json = await graphRequest(
+          `${primary.id}/stats`,
+          { start_time: start, end_time: end, aggregation: "event" },
+          token,
+        );
+        return json;
+      }), null);
+  }
 
   let events = eventsFromActions(dailyRows, range);
   if (stats?.data?.length) {
-    // aggregation=event returns buckets whose own `data` array holds the
-    // per-event rows; older shapes put those rows at the top level.
     const rows: any[] = stats.data.flatMap((bucket: any) =>
       Array.isArray(bucket?.data) ? bucket.data : [bucket],
     );
@@ -404,10 +456,14 @@ async function fetchPixel(ctx: Ctx, token: string, accountId: string, range: Ran
     }
   }
 
-  const checks = await safe<any[]>(ctx, "Pixel diagnostics", async () => {
-    const json = await graphRequest(`${primary.id}/da_checks`, {}, token);
-    return (json?.data ?? []) as any[];
-  }, []);
+  let checks: any[] = [];
+  if (rateLimitCooldownMs() === 0) {
+    checks = await safe<any[]>(ctx, "Pixel diagnostics", () =>
+      cachedByToken(pixelCache, token, `PixelChecks:${primary.id}`, async () => {
+        const json = await graphRequest(`${primary.id}/da_checks`, {}, token);
+        return (json?.data ?? []) as any[];
+      }), []);
+  }
 
   const diagnostics: PixelDiagnostic[] = checks.length
     ? checks.slice(0, 12).map((c: any) => ({
@@ -448,6 +504,18 @@ function defaultDiagnostics(pixel: any, events: PixelEvent[]): PixelDiagnostic[]
   ];
 }
 
+/** Fetch metadata for the exact entities present in insights, in batched node reads. */
+async function metadataByIds(ctx: Ctx, token: string, label: string, ids: string[], fields: string, batchSize = 25) {
+  const unique = [...new Set(ids.filter(Boolean).map(String))];
+  if (!unique.length) return [] as any[];
+  const nodes = await safe(ctx, label, () => getManyByIds(token, unique, fields, batchSize), new Map<string, any>());
+  const rows = unique.map((id) => nodes.get(id)).filter(Boolean) as any[];
+  if (rows.length < unique.length) {
+    ctx.warnings.push(`${label}: ${unique.length - rows.length} of ${unique.length} records were not returned by Meta. Confirm asset permissions and retry after any rate-limit cooldown.`);
+  }
+  return rows;
+}
+
 /* ─────────────────────────── Main ─────────────────────────── */
 
 export async function buildLiveData(token: string, account: Account, range: Range): Promise<ReportData> {
@@ -456,24 +524,15 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   const timeRange = { since: range.since, until: range.until };
   const prevTimeRange = { since: compareRange.since, until: compareRange.until };
 
-  const [accountTotals, prevAccountTotals, dailyRows, prevRows, campaignRows, campaignMeta, adSetRows, adSetMeta, adRows, adMeta, bAge, bPlatform, bPlacement, bDevice, bRegion, hourlyRows, leadData, campaignDaily] =
+  const [accountTotals, prevAccountTotals, dailyRows, prevRows, campaignRows, adSetRows, adRows, bAge, bPlatform, bPlacement, bDevice, bRegion, hourlyRows, leadData, campaignDaily] =
     await Promise.all([
       safe<any[]>(ctx, "Account totals", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: timeRange, limit: 1 }), []),
       safe<any[]>(ctx, "Previous account totals", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: prevTimeRange, limit: 1 }), []),
       safe<any[]>(ctx, "Daily insights", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: timeRange, time_increment: 1, limit: 400 }), []),
       safe<any[]>(ctx, "Previous-period insights", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: prevTimeRange, time_increment: 1, limit: 400 }), []),
       safe<any[]>(ctx, "Campaign insights", () => getInsights(token, account.id, { fields: `campaign_id,campaign_name,objective,${BASE_FIELDS}`, level: "campaign", time_range: timeRange, limit: 500 }), []),
-      safe<any[]>(ctx, "Campaign metadata", () => getEdgePaged(token, account.id, "campaigns", {
-        fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time,budget_remaining",
-      }, { limit: 100, max: 500 }), []),
       safe<any[]>(ctx, "Ad set insights", () => getInsights(token, account.id, { fields: `adset_id,adset_name,campaign_id,campaign_name,${BASE_FIELDS}${RANKING_FIELDS}`, level: "adset", time_range: timeRange, limit: 500 }), []),
-      safe<any[]>(ctx, "Ad set metadata", () => getEdgePaged(token, account.id, "adsets", {
-        fields: "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,targeting{age_min,age_max,genders,geo_locations,publisher_platforms,facebook_positions,instagram_positions,device_platforms,interests,flexible_spec}",
-      }, { limit: 25, max: 300 }), []),
       safe<any[]>(ctx, "Ad insights", () => getInsights(token, account.id, { fields: `ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,${BASE_FIELDS}${RANKING_FIELDS}`, level: "ad", time_range: timeRange, limit: 500 }), []),
-      safe<any[]>(ctx, "Ad metadata", () => getEdgePaged(token, account.id, "ads", {
-        fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_hash,image_url,thumbnail_url,video_id,object_story_spec,call_to_action_type,asset_feed_spec,effective_object_story_id,object_story_id,instagram_permalink_url}",
-      }, { limit: 25, max: 400 }), []),
       safe<any[]>(ctx, "Age & gender breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "age,gender", time_range: timeRange, limit: 200 }), []),
       safe<any[]>(ctx, "Platform breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "publisher_platform", time_range: timeRange, limit: 50 }), []),
       safe<any[]>(ctx, "Placement breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "publisher_platform,platform_position", time_range: timeRange, limit: 200 }), []),
@@ -491,14 +550,26 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       }), []),
     ]);
 
+  // Metadata is fetched for the exact campaign/ad set/ad IDs returned by
+  // insights, using batched node reads. This avoids account-edge page caps
+  // silently dropping creatives for ads that do have delivery data.
+  const [campaignMeta, adSetMeta, adMeta] = await Promise.all([
+    metadataByIds(ctx, token, "Campaign metadata", campaignRows.map((r) => String(r.campaign_id ?? "")),
+      "id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time,budget_remaining", 50),
+    metadataByIds(ctx, token, "Ad set metadata", adSetRows.map((r) => String(r.adset_id ?? "")),
+      "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,targeting{age_min,age_max,genders,geo_locations,publisher_platforms,facebook_positions,instagram_positions,device_platforms,interests,flexible_spec}", 50),
+    metadataByIds(ctx, token, "Ad metadata", adRows.map((r) => String(r.ad_id ?? "")),
+      "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_hash,image_url,thumbnail_url,video_id,object_story_spec,call_to_action_type,asset_feed_spec,effective_object_story_id,object_story_id,instagram_permalink_url}", 50),
+  ]);
+
   for (const [label, rows] of [
     ["Campaign", campaignRows], ["Ad set", adSetRows], ["Ad", adRows],
-    ["Campaign metadata", campaignMeta], ["Ad set metadata", adSetMeta], ["Ad metadata", adMeta],
     ["Daily", dailyRows], ["Hourly", hourlyRows], ["Campaign daily", campaignDaily],
   ] as [string, any[]][]) {
-    if ((rows as any).truncated) ctx.warnings.push(`${label} data: source row/page limit reached. This report is partial; use a shorter period for a complete comparison.`);
+    if ((rows as any).truncated) ctx.warnings.push(`${label} data: ${(rows as any).error ?? "source row/page limit reached"}. This report is partial; use a shorter period for a complete comparison.`);
   }
-  if (adRows.length > adMeta.length) ctx.warnings.push("Creative metadata: some ads are outside the metadata limit. Their metrics remain available, but media may be missing.");
+  const missingCreativeIds = adRows.map((r) => String(r.ad_id ?? "")).filter((id) => id && !adMeta.some((m) => String(m.id) === id));
+  if (missingCreativeIds.length) ctx.warnings.push(`Creative metadata: ${missingCreativeIds.length} ads with delivery data did not return metadata. Their metrics remain available, but media may be missing. Confirm ads_read/asset permissions and retry after any cooldown.`);
   const imageHashes = [...new Set(adMeta.flatMap((ad) => imageHashesOf(ad.creative)))];
   const [pixelData, videoById, imageByHash] = await Promise.all([
     fetchPixel(ctx, token, account.id, range, dailyRows),

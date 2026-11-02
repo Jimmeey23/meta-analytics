@@ -7,7 +7,7 @@ import type { Account, Mode, Range, ReportData } from "./types";
 import { COOKIE_NAME, decodeSession, type Session } from "./meta";
 import { metaConfig } from "./meta";
 import { buildDemoData, DEMO_ACCOUNTS } from "./demo";
-import { buildLiveData } from "./live";
+import { buildLiveData, clearLiveCaches } from "./live";
 import { resolveRange } from "./ranges";
 import { getAccounts } from "./meta";
 import { redactSecrets, safeDiv, sum } from "./utils";
@@ -137,7 +137,12 @@ export async function loadReport(opts: ReportOptions = {}): Promise<{ data: Repo
 
 export function clearReportCache(session?: Session | null) {
   demoCache.clear();
-  reportCache.clear(session?.accessToken ? scopeFor(session.accessToken) : "");
+  if (session?.accessToken) {
+    reportCache.clear(scopeFor(session.accessToken));
+    clearLiveCaches(session.accessToken);
+  } else {
+    reportCache.clear("");
+  }
 }
 
 export { DAY_NAMES_SHORT, DAY_NAMES_LONG };

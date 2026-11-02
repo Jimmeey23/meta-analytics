@@ -14,6 +14,7 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 
 const AD_COUNT = 400
+const FORM_COUNT = 28
 const counts = new Map()
 const tally = (k) => counts.set(k, (counts.get(k) ?? 0) + 1)
 
@@ -44,9 +45,24 @@ const server = createServer((req, res) => {
   const ids = url.searchParams.get('ids')
 
   if (ids) {
-    tally('BATCH ids=')
+    const fields = url.searchParams.get('fields') ?? ''
     const body = {}
-    for (const id of ids.split(',')) body[id] = { id, picture: 'p', ...(url.searchParams.get('fields')?.includes('source') ? { source: `https://v/${id}.mp4` } : {}) }
+    if (fields.includes('creative')) {
+      tally('BATCH ad metadata')
+      for (const id of ids.split(',')) {
+        const i = Number(id.replace('ad', '')) || 0
+        body[id] = { id, name: `Ad ${i}`, adset_id: 'as1', campaign_id: 'c1', effective_status: 'ACTIVE', creative: { id: `cr${i}`, title: `T${i}`, video_id: `vid${i}`, object_story_spec: { video_data: { video_id: `vid_b${i}` } }, asset_feed_spec: { videos: [{ video_id: `vid_c${i}` }] } } }
+      }
+    } else if (fields.includes('targeting')) {
+      tally('BATCH adset metadata')
+      for (const id of ids.split(',')) body[id] = { id, name: 'AS', campaign_id: 'c1', effective_status: 'ACTIVE', daily_budget: '1000' }
+    } else if (fields.includes('budget_remaining')) {
+      tally('BATCH campaign metadata')
+      for (const id of ids.split(',')) body[id] = { id, name: 'C', effective_status: 'ACTIVE', objective: 'OUTCOME_SALES', daily_budget: '1000' }
+    } else {
+      tally('BATCH video')
+      for (const id of ids.split(',')) body[id] = { id, picture: 'p', ...(fields.includes('source') ? { source: `https://v/${id}.mp4` } : {}) }
+    }
     res.end(JSON.stringify(body))
     return
   }
@@ -58,6 +74,8 @@ const server = createServer((req, res) => {
   else if (p.endsWith('/adimages')) data = [{ hash: 'hash-1', url: 'https://img/full.jpg' }]
   else if (p.endsWith('/adspixels')) data = [{ id: 'px1', name: 'Pixel' }]
   else if (p === 'me/accounts') data = [{ id: 'pg1', name: 'Page', access_token: 'pgtok' }]
+  else if (p === 'pg1/leadgen_forms') data = Array.from({ length: FORM_COUNT }, (_, i) => ({ id: `form${i}`, name: `Form ${i}`, status: 'ACTIVE', leads_count: 10 }))
+  else if (/^form\d+\/leads$/.test(p)) data = [{ id: `${p.split('/')[0]}-lead`, created_time: '2026-08-15T00:00:00+0000', form_id: p.split('/')[0], field_data: [] }]
   res.end(JSON.stringify({ data }))
 })
 
@@ -91,12 +109,17 @@ try {
 
   const report = await buildLiveData('TESTTOKEN', account, range)
   assert.ok(report.ads.every(ad => !ad.creative?.videoUrl), 'report must not eagerly resolve video files')
-  const beforeVideo = counts.get('BATCH ids=') ?? 0
+  assert.equal(report.leadForms.length, FORM_COUNT, 'all lead-bearing forms must be listed')
+  assert.equal(report.leads.length, FORM_COUNT, 'leads must be loaded from every lead-bearing form, not only the 12 largest')
+  assert.ok(!report.warnings.some(w => w.includes('12 largest')), 'the arbitrary 12-form cap must be gone')
+  assert.equal(report.ads.length, AD_COUNT, 'all ads with delivery data must remain in the report')
+  assert.ok(report.ads.every(ad => ad.creative), 'creative metadata must be batch-fetched for every ad with delivery data')
+  const beforeVideo = counts.get('BATCH video') ?? 0
   const video = await resolveVideoSource('TESTTOKEN', 'vid0')
   assert.ok(video.source)
-  assert.equal(counts.get('BATCH ids='), beforeVideo + 1, 'opening a video resolves one source')
+  assert.equal(counts.get('BATCH video'), beforeVideo + 1, 'opening a video resolves one source')
   await resolveVideoSource('TESTTOKEN', 'vid0')
-  assert.equal(counts.get('BATCH ids='), beforeVideo + 1, 'repeat playback uses source cache')
+  assert.equal(counts.get('BATCH video'), beforeVideo + 1, 'repeat playback uses source cache')
   const first = new Map(counts)
 
   // Second build: caches must prevent a second page-list read.
@@ -114,10 +137,13 @@ try {
 
   const perVideo = [...first.keys()].filter((k) => /^\{id\}$/.test(k)).length
   assert.equal(perVideo, 0, 'must not issue one call per video id')
-  assert.ok(first.get('BATCH ids=') <= 4, `poster lookups should batch, plus one explicit playback, got ${first.get('BATCH ids=')}`)
-  assert.ok(total(first) < 40, `one report build should stay well under 40 calls, got ${total(first)}`)
+  assert.ok((first.get('BATCH video') ?? 0) <= 4, `poster lookups should batch, plus one explicit playback, got ${first.get('BATCH video')}`)
+  assert.ok((first.get('BATCH ad metadata') ?? 0) <= Math.ceil(AD_COUNT / 50), 'ad metadata must use batched node reads')
+  assert.ok(total(first) < 80, `one complete report build should stay bounded, got ${total(first)}`)
   assert.equal(second.get('me/accounts'), undefined, 'page list must be served from cache on rebuild')
-  assert.equal(second.get('BATCH ids='), undefined, 'video sources must be served from cache on rebuild')
+  assert.equal(second.get('BATCH video'), undefined, 'video sources must be served from cache on rebuild')
+  assert.equal(second.get('pg1/leadgen_forms'), undefined, 'form lists must be served from cache on rebuild')
+  assert.ok(![...second.keys()].some(k => /^form\d+\/leads$/.test(k)), 'lead rows must be served from cache on rebuild')
   console.log('\nall call-budget checks passed')
 } finally {
   rmSync(out, { recursive: true, force: true })

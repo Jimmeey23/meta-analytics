@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 
-export type PagedRows = any[] & { truncated?: boolean; hasMore?: boolean };
+export type PagedRows = any[] & { truncated?: boolean; hasMore?: boolean; error?: string };
 
 export const SCOPES = [
   "ads_read",
@@ -277,6 +277,15 @@ async function request(path: string, params: Record<string, unknown>, token?: st
   }
   await acquire();
   try {
+    // A limit may have opened while this request was queued. Re-check after
+    // acquiring a slot so queued work does not keep hammering Meta.
+    const queuedWait = rateLimitCooldownMs();
+    if (queuedWait > 0) {
+      throw new MetaError(
+        `Meta rate limit reached — requests are paused for ${Math.ceil(queuedWait / 1000)}s. Retry after that.`,
+        4,
+      );
+    }
     return await rawRequest(path, params, token, version);
   } catch (err) {
     if (isRateLimited(err)) throttledUntil = Date.now() + COOLDOWN_MS;
@@ -302,18 +311,32 @@ export async function getManyByIds(
   const out = new Map<string, any>();
   const unique = [...new Set(ids.filter(Boolean).map(String))];
 
-  for (let i = 0; i < unique.length; i += batchSize) {
-    const chunk = unique.slice(i, i + batchSize);
+  async function readChunk(chunk: string[]): Promise<void> {
     try {
       const json = await request("", { ids: chunk.join(","), fields }, token);
       for (const [id, node] of Object.entries(json ?? {})) {
         if (node && typeof node === "object") out.set(String(id), node);
       }
     } catch (err) {
-      // A whole batch can fail on one unreadable node; the rest still matter.
-      if (rateLimitCooldownMs() > 0) break;
-      void err;
+      // A whole batch can fail because the payload is too large or one node is
+      // unreadable. Split only those retriable batch errors; never multiply
+      // calls during a rate limit or when the token itself is invalid.
+      if (rateLimitCooldownMs() > 0 || isRateLimited(err)) return;
+      const code = err instanceof MetaError ? err.code : undefined;
+      if (code === 190 || code === 102) return;
+      const message = err instanceof Error ? err.message : String(err);
+      const splitWorthy = isTooMuchData(err) || (code === 100 && !/field|parameter|syntax|unsupported/i.test(message));
+      if (chunk.length > 1 && splitWorthy) {
+        const mid = Math.floor(chunk.length / 2);
+        await readChunk(chunk.slice(0, mid));
+        await readChunk(chunk.slice(mid));
+      }
     }
+  }
+
+  for (let i = 0; i < unique.length; i += batchSize) {
+    if (rateLimitCooldownMs() > 0) break;
+    await readChunk(unique.slice(i, i + batchSize));
   }
   return out;
 }
@@ -458,7 +481,12 @@ export async function getEdgePaged(
         continue;
       }
       // Partial data beats none, but callers must be able to disclose it.
-      if (rows.length) { const partial: PagedRows = rows.slice(0, max); partial.truncated = true; return partial; }
+      if (rows.length) {
+        const partial: PagedRows = rows.slice(0, max);
+        partial.truncated = true;
+        partial.error = err instanceof Error ? err.message : String(err);
+        return partial;
+      }
       throw err;
     }
     rows.push(...((json?.data ?? []) as any[]));
