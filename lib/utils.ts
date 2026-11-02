@@ -34,6 +34,19 @@ export function sum(arr: number[]) {
   return arr.reduce((a, b) => a + b, 0);
 }
 
+/** Keep expensive edge fan-out bounded while preserving result order. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index]);
+    }
+  }));
+  return results;
+}
+
 export function avg(arr: number[]) {
   return arr.length ? sum(arr) / arr.length : 0;
 }

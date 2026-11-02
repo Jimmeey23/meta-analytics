@@ -27,6 +27,8 @@ export function Topbar({
   const params = useSearchParams();
   const [open, setOpen] = React.useState<null | "range" | "account">(null);
   const [pending, startTransition] = React.useTransition();
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [refreshError, setRefreshError] = React.useState("");
 
   const rangeKey = params.get("range") ?? "last_30d";
   const accountId = params.get("account") ?? accounts[0]?.id;
@@ -177,11 +179,20 @@ export function Topbar({
           </a>
 
           <button
-            onClick={() => startTransition(() => router.refresh())}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-line bg-surface/60 text-muted transition hover:border-brand-500/40 hover:text-ink"
-            title="Refresh data"
+            disabled={refreshing || pending}
+            onClick={async () => {
+              setRefreshing(true); setRefreshError("");
+              try {
+                const response = await fetch("/api/cache", { method: "POST" });
+                if (!response.ok) throw new Error("Refresh failed");
+                startTransition(() => router.refresh());
+              } catch { setRefreshError("Could not refresh. Please try again."); }
+              finally { setRefreshing(false); }
+            }}
+            className="grid h-9 w-9 place-items-center rounded-xl border border-line bg-surface/60 text-muted transition hover:border-brand-500/40 hover:text-ink disabled:opacity-50"
+            title="Invalidate cached data and reload from Meta" aria-label="Refresh data"
           >
-            {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {pending || refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           </button>
 
           <ThemeToggle />
@@ -196,6 +207,7 @@ export function Topbar({
           ) : null}
         </div>
       </div>
+      {refreshError ? <p role="alert" className="px-6 pb-2 text-xs text-neg">{refreshError}</p> : null}
     </header>
   );
 }

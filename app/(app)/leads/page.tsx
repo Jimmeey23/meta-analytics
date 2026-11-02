@@ -141,7 +141,7 @@ export default async function LeadsPage({
         </Panel>
       </div>
 
-      <LeadsExplorer leads={leads} forms={data.leadForms.map((f) => ({ id: f.id, name: f.name }))} />
+      <LeadsExplorer leads={leads} forms={data.leadForms.map((f) => ({ id: f.id, name: f.name }))} ads={data.ads} code={data.account.currency} account={data.kpis} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel className="lg:col-span-2">

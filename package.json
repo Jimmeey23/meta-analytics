@@ -11,7 +11,9 @@
     "check:creative": "node scripts/check-creative-mapping.mjs",
     "check:calls": "node scripts/check-call-budget.mjs",
     "check:limits": "node scripts/check-rate-limits.mjs",
-    "check": "npm run check:creative && npm run check:calls && npm run check:limits"
+    "check:intelligence": "node scripts/check-intelligence.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run check:creative && npm run check:calls && npm run check:limits && npm run check:intelligence"
   },
   "dependencies": {
     "clsx": "2.1.1",

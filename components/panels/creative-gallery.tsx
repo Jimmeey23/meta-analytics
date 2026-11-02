@@ -28,9 +28,11 @@ export function CreativeGallery({
   const [query, setQuery] = React.useState("");
   const [format, setFormat] = React.useState("All");
   const [studio, setStudio] = React.useState("All studios");
+  const [visibleCount, setVisibleCount] = React.useState(limit);
+  React.useEffect(() => setVisibleCount(limit), [query, format, studio, limit, ads]);
 
   const items = React.useMemo(
-    () => ads.filter((a) => a.spend > 0 || a.impressions > 0),
+    () => ads,
     [ads],
   );
   const studios = React.useMemo(
@@ -42,15 +44,16 @@ export function CreativeGallery({
     [items],
   );
 
-  const visible = React.useMemo(() => {
+  const matching = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     return items.filter((ad) => {
       const haystack = `${ad.name} ${ad.adSetName} ${ad.creative?.title ?? ""} ${ad.creative?.body ?? ""}`.toLowerCase();
       return (!q || haystack.includes(q))
         && (format === "All" || mediaType(ad) === format)
         && (studio === "All studios" || (ad.location ?? "Unassigned") === studio);
-    }).slice(0, limit);
-  }, [items, query, format, studio, limit]);
+    });
+  }, [items, query, format, studio]);
+  const visible = matching.slice(0, visibleCount);
 
   const filters = (
     <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
@@ -87,7 +90,7 @@ export function CreativeGallery({
 
   if (!items.length) {
     return (
-      <p className="px-5 py-10 text-center text-xs text-muted">No creatives with delivery in this period.</p>
+      <p className="px-5 py-10 text-center text-xs text-muted">No creatives returned in this period.</p>
     );
   }
 
@@ -111,20 +114,22 @@ export function CreativeGallery({
               >
                 <button
                   onClick={() => open({ kind: "creative", payload: { ad, code, account, siblings } })}
-                  className="block w-full text-left"
+                  aria-label={`Open ${ad.creative?.title ?? ad.name} creative analysis`}
+                  className="block w-full rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                 >
                   <div className="overflow-hidden rounded-2xl border border-line/70 bg-surface transition-all duration-300 group-hover:-translate-y-1 group-hover:border-brand-500/40 group-hover:shadow-lift">
                     {/* preview */}
                     <div className="relative aspect-[4/3] w-full overflow-hidden bg-gradient-to-br from-brand-500/25 via-accent/20 to-accent-2/20">
                       <CreativeMedia
                         ad={ad}
+                        priority={visible.indexOf(ad) < 3}
                         showVideoBadge
-                        imageClassName="transition-transform duration-300 group-hover:scale-105"
+                        imageClassName="object-contain"
                       />
                       <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] font-medium text-white backdrop-blur">
                         {ad.creative?.format ?? (isVideo ? "Video" : "Image")}
                       </span>
-                      <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-md bg-black/45 text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
+                      <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-md bg-black/45 text-white opacity-100 backdrop-blur transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                         <Maximize2 className="h-3.5 w-3.5" />
                       </span>
 
@@ -178,14 +183,24 @@ export function CreativeGallery({
           })}
         </div>
       )}
+      {matching.length > visibleCount ? <div className="flex flex-wrap items-center justify-center gap-3 px-5 pb-5">
+        <span className="text-xs text-muted">Showing {visible.length} of {matching.length} creatives</span>
+        <button type="button" onClick={() => setVisibleCount((n) => n + limit)} className="rounded-xl border border-line px-4 py-2 text-xs font-semibold hover:border-brand-500">Load {Math.min(limit, matching.length - visibleCount)} more</button>
+      </div> : null}
     </div>
   );
 }
 
-export function CreativeThumb({ ad, className }: { ad: AdRow; className?: string }) {
-  return (
-    <div className={cn("grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500", className)}>
-      <CreativeMedia ad={ad} />
-    </div>
-  );
+export function CreativeThumb({ ad, className, code = "INR", account, interactive = true }: {
+  ad: AdRow; className?: string; code?: string; account?: Kpis; interactive?: boolean;
+}) {
+  const { open } = useDrilldown();
+  const classes = cn("relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500", interactive && "transition hover:ring-2 hover:ring-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500", className);
+  const media = <CreativeMedia ad={ad} compact showVideoBadge />;
+  return interactive ? (
+    <button type="button" className={classes} aria-label={`Preview ${ad.creative?.title ?? ad.name}`}
+      onClick={(event) => { event.stopPropagation(); open({ kind: "creative", payload: { ad, code, account } }); }}>
+      {media}
+    </button>
+  ) : <div className={classes} aria-hidden="true">{media}</div>;
 }

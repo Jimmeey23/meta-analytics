@@ -3,15 +3,16 @@ import type {
   Account, AdRow, AdSetRow, Breakdown, CampaignRow, FunnelStep, Lead, LeadForm,
   PixelConfig, PixelDiagnostic, PixelEvent, Range, ReportData, SeriesPoint,
 } from "./types";
-import { getEdge, getEdgePaged, getInsights, getManyByIds, graphRequest, graphUsage } from "./meta";
-import { creativeFrom, videoIdsOf } from "./creative";
+import { getAdImages, getEdge, getEdgePaged, getInsights, getManyByIds, graphRequest, graphUsage } from "./meta";
+import { creativeFrom, imageHashesOf, videoIdsOf } from "./creative";
 import {
-  costForAction, deriveKpis, emptyKpis, pickResult, roasFrom, sumActions, sumActionValues,
+  costForAction, deriveKpis, emptyKpis, firstAction, pickResult, roasFrom, sumActions, sumActionValues,
   toBreakdownRows, toNumber, type Action,
 } from "./metrics";
 import { hourFromKey, daysInRange } from "./metrics";
 import { previousRange } from "./ranges";
-import { inferStudioLocation, redactSecrets, safeDiv, sum } from "./utils";
+import { ReportCache } from "./report-cache";
+import { inferStudioLocation, mapLimit, redactSecrets, safeDiv, sum } from "./utils";
 
 const BASE_FIELDS = [
   "spend", "impressions", "reach", "frequency", "clicks", "ctr", "cpc", "cpm", "cpp",
@@ -58,29 +59,25 @@ async function safe<T>(ctx: Ctx, label: string, fn: () => Promise<T>, fallback: 
  * them is the difference between 6 calls an hour and one per page view.
  */
 const PAGE_TTL = 30 * 60 * 1000;
-const pageCache = new Map<string, { at: number; value: any }>();
+const pageCache = new ReportCache<any>({ maxEntries: 64, ttlMs: PAGE_TTL });
 
 async function cachedByToken<T>(
-  store: Map<string, { at: number; value: any }>,
+  store: ReportCache<any>,
   token: string,
   label: string,
   fn: () => Promise<T>,
 ): Promise<T> {
   const key = `${label}:${crypto.createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
-  const hit = store.get(key);
-  if (hit && Date.now() - hit.at < PAGE_TTL) return hit.value as T;
-  const value = await fn();
-  store.set(key, { at: Date.now(), value });
-  return value;
+  return store.read(key, fn);
 }
 
 /* ─────────────────────── Video source resolution ─────────────────────── */
 
-/** How many video creatives are worth resolving for one report. */
-const VIDEO_LOOKUP_CAP = 60;
+/** Warm the posters most likely to be seen; every other video resolves on click. */
+const VIDEO_LOOKUP_CAP = 150;
 /** Signed `source` URLs outlive this comfortably, so re-use is safe. */
 const VIDEO_TTL = 20 * 60 * 1000;
-const videoCache = new Map<string, { at: number; node: any }>();
+const videoCache = new ReportCache<any>({ maxEntries: 1000, ttlMs: VIDEO_TTL });
 
 /**
  * Resolves playable sources for the video creatives most worth showing.
@@ -112,33 +109,41 @@ async function resolveVideos(ctx: Ctx, token: string, adMeta: any[], adRows: any
   const ids = wanted.slice(0, VIDEO_LOOKUP_CAP);
 
   const now = Date.now();
+  const scope = crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
   const resolved = new Map<string, any>();
   const missing: string[] = [];
   for (const id of ids) {
-    const hit = videoCache.get(id);
-    if (hit && now - hit.at < VIDEO_TTL) resolved.set(id, hit.node);
+    const hit = videoCache.peek(`${scope}:${id}`);
+    if (hit) resolved.set(id, hit.value);
     else missing.push(id);
   }
 
   if (missing.length) {
+    // Source files are fetched only when a user opens a video. Warming hundreds
+    // of signed MP4 URLs made every report slower and most URLs were never used.
     const fetched = await safe(
-      ctx,
-      "Video creatives",
-      () => getManyByIds(token, missing, "id,source,picture,permalink_url"),
+      ctx, "Video posters",
+      () => getManyByIds(token, missing, "id,picture,permalink_url"),
       new Map<string, any>(),
     );
     for (const [id, node] of fetched) {
-      videoCache.set(id, { at: now, node });
+      videoCache.write(`${scope}:${id}`, node);
       resolved.set(id, node);
     }
   }
-
-  if (wanted.length >= VIDEO_LOOKUP_CAP) {
-    ctx.warnings.push(
-      `Video creatives: resolved playable sources for the top ${VIDEO_LOOKUP_CAP} video ads by spend to stay within Meta's rate limits.`,
-    );
-  }
   return resolved;
+}
+
+/** Authorized by the route against an ad in the current account's report. */
+export async function resolveVideoSource(token: string, id: string) {
+  const scope = crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
+  const key = `${scope}:${id}`;
+  const hit = videoCache.peek(key);
+  if (hit?.value.source) return hit.value;
+  const node = (await getManyByIds(token, [id], "id,source,picture,permalink_url")).get(id);
+  if (!node?.source) throw new Error("Meta did not return a playable source for this video.");
+  videoCache.write(key, { ...hit?.value, ...node });
+  return node;
 }
 
 function ranking(v: unknown) {
@@ -151,18 +156,18 @@ function metricsFrom(row: any, objective?: string) {
   const values = (row.action_values ?? []) as Action[];
   const costs = (row.cost_per_action_type ?? []) as Action[];
   const result = pickResult(objective, actions);
-  const revenue = sumActionValues(values, PURCHASE_TYPES);
-  const leads = sumActions(actions, LEAD_TYPES);
-  const purchases = sumActions(actions, PURCHASE_TYPES);
-  const landingPageViews = sumActions(actions, ["landing_page_view", "offsite_conversion.fb_pixel_page_view"]);
-  const videoViews = sumActions(actions, ["video_thruplay_watched_actions", "video_view", "video_p25_watched_actions"]);
+  const revenue = firstAction(values, PURCHASE_TYPES);
+  const leads = firstAction(actions, LEAD_TYPES);
+  const purchases = firstAction(actions, PURCHASE_TYPES);
+  const landingPageViews = firstAction(actions, ["landing_page_view", "offsite_conversion.fb_pixel_page_view"]);
+  const videoViews = firstAction(actions, ["video_view", "video_thruplay_watched_actions", "video_p25_watched_actions"]);
   const spend = toNumber(row.spend);
   return {
     spend,
     impressions: toNumber(row.impressions),
     reach: toNumber(row.reach),
     frequency: toNumber(row.frequency) || safeDiv(toNumber(row.impressions), toNumber(row.reach)),
-    clicks: toNumber(row.clicks),
+    clicks: firstAction(actions, ["link_click"]) || toNumber(row.inline_link_clicks) || toNumber(row.clicks),
     leads,
     purchases,
     revenue,
@@ -260,43 +265,36 @@ async function fetchLeads(ctx: Ctx, token: string, range: Range) {
     safe<any[]>(ctx, "Pages", () =>
       getEdge(token, "me", "accounts", { fields: "id,name,access_token", limit: 100 }), []));
 
-  const forms: LeadForm[] = [];
-  const leads: Lead[] = [];
-  let fetched = 0;
-
-  for (const page of pages) {
+  const pageForms = await mapLimit(pages, 3, async (page) => {
     const pageToken = (page.access_token as string) || token;
-    const pageForms = await safe<any[]>(ctx, `Lead forms (${page.name ?? page.id})`, () =>
-      getEdge(pageToken, String(page.id), "leadgen_forms", {
-        fields: "id,name,status,leads_count,created_time,locale,questions{id,label,type}",
-        limit: 50,
-      }), []);
-    for (const form of pageForms) {
-      forms.push({
-        id: String(form.id),
-        name: form.name ?? "Untitled form",
-        status: form.status ?? "ACTIVE",
-        leadsCount: Number(form.leads_count ?? 0),
-        pageId: String(page.id),
-        pageName: page.name ?? "Page",
-        locale: form.locale,
-        createdTime: form.created_time,
-        questionsCount: form.questions?.data?.length,
-      });
-      if (fetched >= 6) continue;
-      const rows = await safe<any[]>(ctx, `Leads (${form.name})`, () =>
-        getEdge(pageToken, String(form.id), "leads", {
-          fields: "id,created_time,ad_id,ad_name,adset_name,campaign_id,campaign_name,form_id,platform,is_organic,field_data",
-          limit: 500,
-          filtering: [{ field: "time_created", operator: "GREATER_THAN", value: since }, { field: "time_created", operator: "LESS_THAN", value: until }],
-        }), []);
-      fetched += 1;
-      for (const row of rows) leads.push(mapLead(row, form.name, form.id, ));
-    }
-  }
+    const rows = await safe<any[]>(ctx, `Lead forms (${page.name ?? page.id})`, () =>
+      cachedByToken(pageCache, token, `Forms:${page.id}`, () =>
+        getEdgePaged(pageToken, String(page.id), "leadgen_forms", {
+          fields: "id,name,status,leads_count,created_time,locale,questions{id,label,type}",
+        }, { limit: 50, max: 200 })), []);
+    return { page, rows };
+  });
+  const forms: (LeadForm & { pageToken: string })[] = pageForms.flatMap(({ page, rows }) => rows.map((form) => ({
+    id: String(form.id), name: form.name ?? "Untitled form", status: form.status ?? "ACTIVE",
+    leadsCount: Number(form.leads_count ?? 0), pageId: String(page.id), pageName: page.name ?? "Page",
+    pageToken: (page.access_token as string) || token,
+    locale: form.locale, createdTime: form.created_time, questionsCount: form.questions?.data?.length,
+  })));
+  // Prioritise forms with leads rather than whichever six happened to come first.
+  const candidates = forms.filter((f) => f.leadsCount > 0).sort((a, b) => b.leadsCount - a.leadsCount).slice(0, 12);
+  const batches = await mapLimit(candidates, 3, async (form) => safe<any[]>(ctx, `Leads (${form.name})`, () =>
+    getEdgePaged(form.pageToken!, form.id, "leads", {
+      fields: "id,created_time,ad_id,ad_name,adset_name,campaign_id,campaign_name,form_id,platform,is_organic,field_data",
+      filtering: [{ field: "time_created", operator: "GREATER_THAN", value: since }, { field: "time_created", operator: "LESS_THAN", value: until }],
+    }, { limit: 200, max: 2000 }), []));
+  const leads = batches.flatMap((rows, i) => rows.map((row) => mapLead(row, candidates[i].name, candidates[i].id)));
+  if (forms.length > candidates.length) ctx.warnings.push(`Lead capture: loaded the 12 largest forms of ${forms.length}; narrow the date range or use Meta's lead export for a complete audit.`);
   leads.sort((a, b) => (a.createdTime < b.createdTime ? 1 : -1));
-  // Guard against unbounded payloads on very high-volume accounts.
-  return { forms, leads: leads.slice(0, 2000) };
+  if (leads.length > 2000) ctx.warnings.push("Lead capture: showing the newest 2,000 leads. Export a narrower period for a complete lead audit.");
+  return {
+    forms: forms.map(({ pageToken, ...form }) => form),
+    leads: leads.slice(0, 2000),
+  };
 }
 
 /* ─────────────────────────── Pixel ─────────────────────────── */
@@ -458,8 +456,10 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   const timeRange = { since: range.since, until: range.until };
   const prevTimeRange = { since: compareRange.since, until: compareRange.until };
 
-  const [dailyRows, prevRows, campaignRows, campaignMeta, adSetRows, adSetMeta, adRows, adMeta, bAge, bPlatform, bPlacement, bDevice, bRegion, hourlyRows, leadData, campaignDaily] =
+  const [accountTotals, prevAccountTotals, dailyRows, prevRows, campaignRows, campaignMeta, adSetRows, adSetMeta, adRows, adMeta, bAge, bPlatform, bPlacement, bDevice, bRegion, hourlyRows, leadData, campaignDaily] =
     await Promise.all([
+      safe<any[]>(ctx, "Account totals", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: timeRange, limit: 1 }), []),
+      safe<any[]>(ctx, "Previous account totals", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: prevTimeRange, limit: 1 }), []),
       safe<any[]>(ctx, "Daily insights", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: timeRange, time_increment: 1, limit: 400 }), []),
       safe<any[]>(ctx, "Previous-period insights", () => getInsights(token, account.id, { fields: BASE_FIELDS, time_range: prevTimeRange, time_increment: 1, limit: 400 }), []),
       safe<any[]>(ctx, "Campaign insights", () => getInsights(token, account.id, { fields: `campaign_id,campaign_name,objective,${BASE_FIELDS}`, level: "campaign", time_range: timeRange, limit: 500 }), []),
@@ -472,7 +472,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       }, { limit: 25, max: 300 }), []),
       safe<any[]>(ctx, "Ad insights", () => getInsights(token, account.id, { fields: `ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,${BASE_FIELDS}${RANKING_FIELDS}`, level: "ad", time_range: timeRange, limit: 500 }), []),
       safe<any[]>(ctx, "Ad metadata", () => getEdgePaged(token, account.id, "ads", {
-        fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_url,thumbnail_url,video_id,object_story_spec,call_to_action_type,asset_feed_spec}",
+        fields: "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,title,body,image_hash,image_url,thumbnail_url,video_id,object_story_spec,call_to_action_type,asset_feed_spec,effective_object_story_id,object_story_id,instagram_permalink_url}",
       }, { limit: 25, max: 400 }), []),
       safe<any[]>(ctx, "Age & gender breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "age,gender", time_range: timeRange, limit: 200 }), []),
       safe<any[]>(ctx, "Platform breakdown", () => getInsights(token, account.id, { fields: BASE_FIELDS, level: "account", breakdowns: "publisher_platform", time_range: timeRange, limit: 50 }), []),
@@ -482,7 +482,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       safe<any[]>(ctx, "Hourly breakdown", () => getInsights(token, account.id, {
         fields: "spend,impressions,clicks,actions", level: "account",
         breakdowns: "hourly_stats_aggregated_by_advertiser_time_zone",
-        time_range: timeRange, time_increment: range.days <= 31 ? 1 : undefined, limit: 1200,
+        time_range: timeRange, time_increment: 1, limit: 500,
       }), []),
       fetchLeads(ctx, token, range),
       safe<any[]>(ctx, "Campaign daily insights", () => getInsights(token, account.id, {
@@ -491,9 +491,20 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       }), []),
     ]);
 
-  const pixelData = await fetchPixel(ctx, token, account.id, range, dailyRows);
-
-  const videoById = await resolveVideos(ctx, token, adMeta, adRows);
+  for (const [label, rows] of [
+    ["Campaign", campaignRows], ["Ad set", adSetRows], ["Ad", adRows],
+    ["Campaign metadata", campaignMeta], ["Ad set metadata", adSetMeta], ["Ad metadata", adMeta],
+    ["Daily", dailyRows], ["Hourly", hourlyRows], ["Campaign daily", campaignDaily],
+  ] as [string, any[]][]) {
+    if ((rows as any).truncated) ctx.warnings.push(`${label} data: source row/page limit reached. This report is partial; use a shorter period for a complete comparison.`);
+  }
+  if (adRows.length > adMeta.length) ctx.warnings.push("Creative metadata: some ads are outside the metadata limit. Their metrics remain available, but media may be missing.");
+  const imageHashes = [...new Set(adMeta.flatMap((ad) => imageHashesOf(ad.creative)))];
+  const [pixelData, videoById, imageByHash] = await Promise.all([
+    fetchPixel(ctx, token, account.id, range, dailyRows),
+    resolveVideos(ctx, token, adMeta, adRows),
+    safe(ctx, "Creative images", () => getAdImages(token, account.id, imageHashes), new Map<string, any>()),
+  ]);
 
   // Meta reports quota consumption on every response; say so before the pool
   // runs out rather than after the first refusal.
@@ -507,7 +518,8 @@ export async function buildLiveData(token: string, account: Account, range: Rang
 
   const series = seriesFrom(dailyRows);
   const prevSeries = seriesFrom(prevRows);
-  const kpis = dailyRows.length ? kpiFrom(dailyRows.reduce((acc: any, r: any) => {
+  if (!accountTotals.length && dailyRows.length) ctx.warnings.push("Account reach: unique period totals were unavailable. Daily reach is additive and may overstate unique reach; interpret frequency cautiously.");
+  const kpis = accountTotals.length ? kpiFrom(accountTotals[0]) : dailyRows.length ? kpiFrom(dailyRows.reduce((acc: any, r: any) => {
     return {
       spend: toNumber(acc.spend) + toNumber(r.spend),
       impressions: toNumber(acc.impressions) + toNumber(r.impressions),
@@ -521,7 +533,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
     };
   }, { spend: 0, impressions: 0, reach: 0, clicks: 0, actions: [], action_values: [] })) : emptyKpis();
 
-  const prevKpis = prevRows.length ? kpiFrom(prevRows.reduce((acc: any, r: any) => ({
+  const prevKpis = prevAccountTotals.length ? kpiFrom(prevAccountTotals[0]) : prevRows.length ? kpiFrom(prevRows.reduce((acc: any, r: any) => ({
     spend: toNumber(acc.spend) + toNumber(r.spend),
     impressions: toNumber(acc.impressions) + toNumber(r.impressions),
     reach: toNumber(acc.reach) + toNumber(r.reach),
@@ -588,7 +600,7 @@ export async function buildLiveData(token: string, account: Account, range: Rang
       ...kpiFrom(r, r.objective),
       trend: [],
       location: inferStudioLocation(r.ad_name, r.adset_name, r.campaign_name, meta?.name),
-      creative: creativeFrom(meta?.creative, videoById),
+      creative: creativeFrom(meta?.creative, videoById, imageByHash),
     };
   });
 
@@ -602,13 +614,8 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   for (const c of campaigns) {
     const rows = (dailyByCampaign.get(c.id) ?? []).sort((a, b) => (a.date < b.date ? -1 : 1));
     c.trend = rows.slice(-14).map((r) => r.spend);
-    const campaignTotal = c.spend || 1;
-    for (const s of adSets.filter((x) => x.campaignId === c.id)) {
-      s.trend = c.trend.map((v) => (v * s.spend) / campaignTotal);
-      for (const a of ads.filter((x) => x.adSetId === s.id)) {
-        a.trend = s.trend.map((v) => (v * a.spend) / (s.spend || 1));
-      }
-    }
+    // Child trends stay empty until their own daily series is available.
+    // A campaign-shaped line multiplied by spend share is not observed data.
   }
 
   const breakdowns: Record<string, Breakdown> = {
@@ -620,16 +627,15 @@ export async function buildLiveData(token: string, account: Account, range: Rang
   };
 
   const hourly = buildHourly(hourlyRows, range);
+  if (hourlyRows.length && !hourly.length) ctx.warnings.push("Daypart heatmap: source rows lack dates, so weekday timing cannot be established. No estimated heatmap is shown.");
 
   const leadForms = leadData.forms;
   const leads = leadData.leads;
-  const qualified = Math.round(leads.length * 0.5);
   const leadFunnel: FunnelStep[] = [
     { label: "Impressions", value: kpis.impressions, note: `Reach ${Math.round(kpis.reach).toLocaleString()}` },
     { label: "Link clicks", value: kpis.clicks },
     { label: "Landing page views", value: kpis.landingPageViews, note: "Pixel: PageView" },
-    { label: "Leads captured", value: leads.length || kpis.leads, note: "Pixel: Lead" },
-    { label: "Sales-qualified", value: qualified, note: "Estimated" },
+    { label: "Leads captured", value: leads.length || kpis.leads, note: "Captured form rows, otherwise attributed lead actions" },
     { label: "Customers", value: kpis.purchases, note: "Pixel: Purchase" },
   ];
 
@@ -678,21 +684,12 @@ function buildHourly(rows: any[], range: Range) {
       if (hour === null) continue;
       const day = new Date(`${row.date_start}T00:00:00Z`).getUTCDay();
       const cell = index.get(`${day}-${hour}`);
-      if (cell) cell.value += sumActions(row.actions as Action[], ["onsite_conversion.lead_grouped", "lead", "offsite_conversion.fb_pixel_lead", "purchase", "offsite_conversion.fb_pixel_purchase", "link_click"]);
+      if (cell) cell.value += (firstAction(row.actions as Action[], LEAD_TYPES) + firstAction(row.actions as Action[], PURCHASE_TYPES));
     }
     return grid;
   }
-  // Aggregated hour-of-day only → replicate across weekdays.
-  const totals = new Map<number, number>();
-  for (const row of rows) {
-    const hour = hourFromKey(row.hourly_stats_aggregated_by_advertiser_time_zone ?? "");
-    if (hour === null) continue;
-    totals.set(hour, (totals.get(hour) ?? 0) + sumActions(row.actions as Action[], ["onsite_conversion.lead_grouped", "lead", "offsite_conversion.fb_pixel_lead", "purchase", "offsite_conversion.fb_pixel_purchase", "link_click"]));
-  }
-  const grid: { day: number; hour: number; value: number }[] = [];
-  for (let d = 0; d < 7; d++) for (let h = 0; h < 24; h++) grid.push({ day: d, hour: h, value: (totals.get(h) ?? 0) / 7 });
-  void dayNames;
-  return grid;
+  // Do not invent a weekday distribution when the source lacks dates.
+  return [];
 }
 
 export { daysInRange };

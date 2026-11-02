@@ -46,7 +46,7 @@ const server = createServer((req, res) => {
   if (ids) {
     tally('BATCH ids=')
     const body = {}
-    for (const id of ids.split(',')) body[id] = { id, source: `https://v/${id}.mp4`, picture: 'p' }
+    for (const id of ids.split(',')) body[id] = { id, picture: 'p', ...(url.searchParams.get('fields')?.includes('source') ? { source: `https://v/${id}.mp4` } : {}) }
     res.end(JSON.stringify(body))
     return
   }
@@ -55,6 +55,7 @@ const server = createServer((req, res) => {
   let data = []
   if (p.endsWith('/insights')) data = url.searchParams.get('level') === 'ad' ? insightRows(AD_COUNT) : insightRows(3)
   else if (p.endsWith('/ads')) data = adRows(AD_COUNT)
+  else if (p.endsWith('/adimages')) data = [{ hash: 'hash-1', url: 'https://img/full.jpg' }]
   else if (p.endsWith('/adspixels')) data = [{ id: 'px1', name: 'Pixel' }]
   else if (p === 'me/accounts') data = [{ id: 'pg1', name: 'Page', access_token: 'pgtok' }]
   res.end(JSON.stringify({ data }))
@@ -84,11 +85,18 @@ try {
       .replace(/https:\/\/graph\.facebook\.com/g, `http://127.0.0.1:${port}`))
   }
 
-  const { buildLiveData } = await import(path.join(out, 'live.js'))
+  const { buildLiveData, resolveVideoSource } = await import(path.join(out, 'live.js'))
   const account = { id: 'act_1', name: 'Acct', currency: 'INR', timezone: 'Asia/Kolkata', status: 1, amountSpent: 0 }
   const range = { key: 'last_30d', label: 'Last 30 days', since: '2026-08-01', until: '2026-08-30', days: 30 }
 
-  await buildLiveData('TESTTOKEN', account, range)
+  const report = await buildLiveData('TESTTOKEN', account, range)
+  assert.ok(report.ads.every(ad => !ad.creative?.videoUrl), 'report must not eagerly resolve video files')
+  const beforeVideo = counts.get('BATCH ids=') ?? 0
+  const video = await resolveVideoSource('TESTTOKEN', 'vid0')
+  assert.ok(video.source)
+  assert.equal(counts.get('BATCH ids='), beforeVideo + 1, 'opening a video resolves one source')
+  await resolveVideoSource('TESTTOKEN', 'vid0')
+  assert.equal(counts.get('BATCH ids='), beforeVideo + 1, 'repeat playback uses source cache')
   const first = new Map(counts)
 
   // Second build: caches must prevent a second page-list read.
@@ -106,7 +114,7 @@ try {
 
   const perVideo = [...first.keys()].filter((k) => /^\{id\}$/.test(k)).length
   assert.equal(perVideo, 0, 'must not issue one call per video id')
-  assert.ok(first.get('BATCH ids=') <= 3, `video lookups should batch, got ${first.get('BATCH ids=')}`)
+  assert.ok(first.get('BATCH ids=') <= 4, `poster lookups should batch, plus one explicit playback, got ${first.get('BATCH ids=')}`)
   assert.ok(total(first) < 40, `one report build should stay well under 40 calls, got ${total(first)}`)
   assert.equal(second.get('me/accounts'), undefined, 'page list must be served from cache on rebuild')
   assert.equal(second.get('BATCH ids='), undefined, 'video sources must be served from cache on rebuild')

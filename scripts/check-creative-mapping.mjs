@@ -58,6 +58,22 @@ try {
   assert.equal(feed.cta, 'SIGN_UP')
   console.log('ok  asset feed copy and thumbnail')
 
+  // Image-hash-only creatives and mixed carousel assets.
+  const images = new Map([['hash-1', { url: 'https://img.fb/full.jpg' }]])
+  const hashed = creativeFrom({ id: 'c8', image_hash: 'hash-1', title: 'Hashed image' }, new Map(), images)
+  assert.equal(hashed.imageUrl, 'https://img.fb/full.jpg')
+  assert.equal(hashed.thumbnail, 'https://img.fb/full.jpg')
+  const carousel = creativeFrom({ id: 'c9', object_story_spec: { link_data: { child_attachments: [
+    { image_hash: 'hash-1', name: 'Card one' },
+    { video_id: '901', picture: 'https://img.fb/video.jpg', name: 'Card two' },
+  ] } } }, videos, images)
+  assert.equal(carousel.format, 'Carousel')
+  assert.equal(carousel.assets.length, 2)
+  assert.equal(carousel.assets[0].imageUrl, 'https://img.fb/full.jpg')
+  assert.equal(carousel.assets[1].videoId, '901')
+  assert.equal(creativeFrom({ id: 'unsafe', image_url: 'javascript:alert(1)' }, videos).imageUrl, undefined)
+  console.log('ok image hashes, carousel assets and safe media URLs')
+
   assert.equal(creativeFrom(undefined, videos), undefined)
   assert.deepEqual(videoIdsOf(undefined), [])
   console.log('ok  missing creative')

@@ -5,7 +5,8 @@ import { Badge, EmptyState, Panel, PanelHeader, Sparkline } from "@/components/u
 import { currency, num, objectiveLabel, pct, rankingLabel, rankingTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { OpenDrilldown, useDrilldown } from "./drilldown-context";
-import type { AdRow, AdSetRow, CampaignRow } from "@/lib/types";
+import type { AdRow, AdSetRow, CampaignRow, Kpis } from "@/lib/types";
+import { CreativeThumb } from "./creative-gallery";
 
 type SortKey = "name" | "spend" | "impressions" | "clicks" | "ctr" | "cpc" | "results" | "costPerResult" | "roas" | "frequency";
 
@@ -28,8 +29,8 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export function CampaignExplorer({
-  campaigns, adSets, ads, code, defaultSort = "spend",
-}: { campaigns: CampaignRow[]; adSets: AdSetRow[]; ads: AdRow[]; code: string; defaultSort?: SortKey }) {
+  campaigns, adSets, ads, code, account, defaultSort = "spend",
+}: { campaigns: CampaignRow[]; adSets: AdSetRow[]; ads: AdRow[]; code: string; account?: Kpis; defaultSort?: SortKey }) {
   const [query, setQuery] = React.useState("");
   const [status, setStatus] = React.useState("ALL");
   const [sort, setSort] = React.useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: defaultSort, dir: "desc" });
@@ -82,15 +83,16 @@ export function CampaignExplorer({
       <td className="sticky left-0 z-10 bg-surface/95 px-3 py-2.5 backdrop-blur">
         <div className="flex items-center gap-2" style={{ paddingLeft: depth * 18 }}>
           {extra}
-          <div
-            className="min-w-0 cursor-pointer"
+          <button type="button"
+            className="min-w-0 cursor-pointer text-left focus-visible:outline-none focus-visible:text-brand-500"
+            aria-haspopup="dialog" aria-label={`Open ${row.name} details`}
             onClick={() =>
               openDrilldown({
                 kind: "entity",
                 payload: {
                   row,
                   type: "campaign",
-                  code,
+                  code, account,
                   children: adSetsByCampaign.get(row.id) ?? [],
                   creatives: ads.filter((a) => (adSetsByCampaign.get(row.id) ?? []).some((s) => s.id === a.adSetId)),
                 },
@@ -104,7 +106,7 @@ export function CampaignExplorer({
               {row.budget > 0 ? ` · ${money(row.budget)}/${row.budgetType === "lifetime" ? "total" : "day"}` : ""}
               {row.qualityRanking ? ` · Quality ${rankingLabel(row.qualityRanking)}` : ""}
             </p>
-          </div>
+          </button>
         </div>
       </td>
       <td className="px-3 py-2.5"><StatusPill status={row.status} /></td>
@@ -130,7 +132,7 @@ export function CampaignExplorer({
         subtitle="Click a campaign to drill into ad sets, then into individual ads"
         icon={<Filter className="h-4 w-4" />}
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
               <input
@@ -140,7 +142,7 @@ export function CampaignExplorer({
                 className="w-40 rounded-lg border border-line bg-bg py-1.5 pl-8 pr-2 text-[11px] outline-none transition focus:border-brand-500 sm:w-52"
               />
             </div>
-            <div className="flex rounded-lg border border-line p-0.5">
+            <div className="flex max-w-full flex-wrap rounded-lg border border-line p-0.5">
               {["ALL", "ACTIVE", "PAUSED", "ARCHIVED"].map((s) => (
                 <button
                   key={s}
@@ -213,7 +215,8 @@ export function CampaignExplorer({
                                   >
                                     {adOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                                   </button>
-                                  <span
+                                  <button type="button"
+                                    aria-haspopup="dialog" aria-label={`Open ${s.name} details`}
                                     className="truncate text-[12px] text-muted hover:text-brand-500"
                                     title={`Open ${s.name} details`}
                                     onClick={() =>
@@ -222,14 +225,14 @@ export function CampaignExplorer({
                                         payload: {
                                           row: s,
                                           type: "adset",
-                                          code,
+                                          code, account,
                                           children: adsByAdSet.get(s.id) ?? [],
                                         },
                                       })
                                     }
                                   >
                                     {s.name}
-                                  </span>
+                                  </button>
                                 </div>
                               </td>
                               <td className="px-3 py-2"><StatusPill status={s.status} /></td>
@@ -249,14 +252,7 @@ export function CampaignExplorer({
                                   <tr key={a.id} className="border-t border-line/30 bg-ink/[0.03] transition hover:bg-ink/[0.05]">
                                     <td className="sticky left-0 z-10 bg-surface/95 px-3 py-2 backdrop-blur">
                                       <div className="flex items-center gap-2 pl-[54px]">
-                                        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-gradient-to-br from-brand-500/20 to-accent/20 text-brand-500">
-                                          {a.creative?.thumbnail ? (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img src={a.creative.thumbnail} alt="" className="h-7 w-7 rounded-md object-cover" />
-                                          ) : (
-                                            <ImageIcon className="h-3.5 w-3.5" />
-                                          )}
-                                        </div>
+                                        <CreativeThumb ad={a} code={code} account={account} className="h-9 w-9" />
                                         <div
                                           className="min-w-0 cursor-pointer"
                                           onClick={() =>
@@ -311,7 +307,7 @@ export function CampaignExplorer({
   );
 }
 
-export function TopCreatives({ ads, code, limit = 6, account }: { ads: AdRow[]; code: string; limit?: number; account?: any }) {
+export function TopCreatives({ ads, code, limit = 6, account }: { ads: AdRow[]; code: string; limit?: number; account?: Kpis }) {
   const { open } = useDrilldown();
   const top = [...ads].filter((a) => a.impressions > 0).sort((a, b) => b.results - a.results || b.ctr - a.ctr).slice(0, limit);
   if (!top.length) return <EmptyState icon={<ImageIcon className="h-5 w-5" />} title="No ad creatives in this period" />;
@@ -327,14 +323,7 @@ export function TopCreatives({ ads, code, limit = 6, account }: { ads: AdRow[]; 
             payload: { ad: a, code, account, siblings: ads.filter((x) => x.adSetId === a.adSetId && x.id !== a.id) },
           }}
         >
-          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-brand-500/25 via-accent/20 to-accent-2/20 text-brand-500">
-            {a.creative?.thumbnail ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={a.creative.thumbnail} alt="" className="h-12 w-12 rounded-lg object-cover" />
-            ) : (
-              <ImageIcon className="h-5 w-5" />
-            )}
-          </div>
+          <CreativeThumb ad={a} code={code} account={account} interactive={false} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-[13px] font-medium">{a.creative?.title ?? a.name}</p>
             <p className="truncate text-[11px] text-faint">{a.creative?.body ?? a.adSetName}</p>

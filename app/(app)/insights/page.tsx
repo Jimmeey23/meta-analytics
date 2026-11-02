@@ -6,6 +6,10 @@ import { buildSummary, summaryToText } from "@/lib/summary";
 import { ExecutiveSummary } from "@/components/panels/executive-summary";
 import { Panel, PanelHeader, ScoreGauge } from "@/components/ui/primitives";
 import { InsightList } from "@/components/panels/insight-list";
+import { DeepInsights } from "@/components/panels/deep-insights";
+import { analyzeReport } from "@/lib/analytics";
+import { aiConfig } from "@/lib/ai";
+import { DataQualityAlert } from "@/components/panels/data-quality-alert";
 import { BarList } from "@/components/charts";
 import { currency, num, pct } from "@/lib/format";
 import { pctChange } from "@/lib/utils";
@@ -22,6 +26,8 @@ export default async function InsightsPage({
   const summary = buildSummary(data, insights);
   const summaryText = summaryToText(data, summary);
   const code = data.account.currency;
+  const analysis = analyzeReport(data);
+  const ai = aiConfig();
 
   const winners = [...data.campaigns].filter((c) => c.results > 0).sort((a, b) => a.costPerResult - b.costPerResult).slice(0, 5);
   const losers = [...data.campaigns].filter((c) => c.spend > 0).sort((a, b) => b.costPerResult - a.costPerResult).slice(0, 5);
@@ -32,11 +38,13 @@ export default async function InsightsPage({
 
   return (
     <div className="space-y-5">
+      <DataQualityAlert warnings={data.warnings} />
+      <DeepInsights analysis={analysis} aiConfigured={ai.configured} aiAllowed={data.mode === "live" || ai.allowDemo} />
       <ExecutiveSummary summary={summary} text={summaryText} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel className="p-5">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <ScoreGauge score={score} size={140} />
             <div className="min-w-0">
               <p className="text-sm font-semibold">Account health score</p>
@@ -86,7 +94,7 @@ export default async function InsightsPage({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel>
-          <PanelHeader title="Best cost per result" subtitle="Where to move budget" icon={<Sparkles className="h-4 w-4" />} />
+          <PanelHeader title="Lowest cost per result" subtitle="Directional comparison — verify objective and audience mix" icon={<Sparkles className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             {winners.length ? (
               <BarList rows={winners.map((c) => ({ label: c.name, value: c.costPerResult, sub: `${num(c.results)} results` }))} type="currency" code={code} />
@@ -96,7 +104,7 @@ export default async function InsightsPage({
           </div>
         </Panel>
         <Panel>
-          <PanelHeader title="Most expensive results" subtitle="Candidates to pause or rebuild" icon={<AlertOctagon className="h-4 w-4" />} />
+          <PanelHeader title="Highest cost per result" subtitle="Investigate before changing budget" icon={<AlertOctagon className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             {losers.length ? (
               <BarList
@@ -123,7 +131,7 @@ export default async function InsightsPage({
       <Panel>
         <PanelHeader
           title="How these recommendations are generated"
-          subtitle="Deterministic rules, not guesswork"
+          subtitle="Deterministic heuristics, separate from optional AI synthesis"
           icon={<Target className="h-4 w-4" />}
         />
         <div className="grid gap-3 px-5 pb-5 pt-4 text-[12px] text-muted sm:grid-cols-2 lg:grid-cols-3">

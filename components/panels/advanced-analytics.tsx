@@ -4,6 +4,7 @@ import * as React from "react";
 import { BarChart3, Building2, Gauge, MousePointerClick, Target, Wallet } from "lucide-react";
 import type { AdRow, AdSetRow, CampaignRow, Kpis } from "@/lib/types";
 import { CampaignExplorer } from "./campaign-explorer";
+import { CreativeGallery } from "./creative-gallery";
 import { EmptyState, Panel, PanelHeader } from "@/components/ui/primitives";
 import { currency, num, pct } from "@/lib/format";
 import { safeDiv } from "@/lib/utils";
@@ -58,7 +59,8 @@ export function AdvancedAnalytics({ campaigns, adSets, ads, accountKpis, code }:
         </p>
       ) : null}
     </Panel>
-    <CampaignExplorer campaigns={filteredCampaigns} adSets={filteredAdSets} ads={filteredAds} code={code} />
+    <CampaignExplorer campaigns={filteredCampaigns} adSets={filteredAdSets} ads={filteredAds} code={code} account={accountKpis} />
+    <Panel><PanelHeader title="Creative library" subtitle="Every returned creative · tap or click for media and performance detail" icon={<BarChart3 className="h-4 w-4" />} /><CreativeGallery ads={filteredAds} code={code} account={accountKpis} limit={12} /></Panel>
     {location !== "All studios" && totals.spend === 0 && accountKpis.spend > 0 ? <p className="text-xs text-warn">No spend is attributed to this studio in the selected period. Confirm the studio tag in Meta entity names.</p> : null}
   </div>;
 }

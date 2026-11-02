@@ -48,7 +48,7 @@ export function ExecutiveSummary({ summary, text, className }: { summary: Summar
         <p className="text-[14px] font-medium leading-relaxed">{summary.headline}</p>
       </div>
 
-      <div className="grid gap-5 px-5 pb-5 pt-4 lg:grid-cols-[1.35fr_1fr]">
+      <div className="grid gap-5 px-5 pb-5 pt-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <div className="min-w-0">
           <div className="space-y-2.5">
             {summary.paragraphs.map((p, i) => (

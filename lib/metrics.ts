@@ -81,6 +81,16 @@ export function pickResult(objective: string | undefined, actions: Action[] | un
   return { type: types[0], value: 0, label: RESULT_LABEL[types[0]] ?? "Results" };
 }
 
+/** Meta often returns overlapping aliases for the same conversion. Pick one
+ * canonical action instead of adding lead + pixel lead + grouped lead together. */
+export function firstAction(actions: Action[] | undefined, types: string[]) {
+  for (const type of types) {
+    const hit = actions?.find((a) => a.action_type === type);
+    if (hit && Number(hit.value) > 0) return Number(hit.value);
+  }
+  return 0;
+}
+
 export function sumActions(actions: Action[] | undefined, types: string[]) {
   if (!actions) return 0;
   return sum(actions.filter((a) => types.includes(a.action_type)).map((a) => Number(a.value) || 0));
@@ -180,7 +190,7 @@ export function toBreakdownRows(rows: any[], objective?: string): BreakdownRow[]
     const actions = (r.actions ?? []) as Action[];
     const values = (r.action_values ?? []) as Action[];
     const result = pickResult(objective, actions);
-    const revenue = sumActionValues(values, PURCHASE_TYPES);
+    const revenue = firstAction(values, PURCHASE_TYPES);
     return {
       key: keyFor(r),
       spend,

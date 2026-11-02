@@ -194,6 +194,7 @@ export function buildDemoData(accountId: string, range: Range, accountName = "No
             cta: CTAS[(ci + s + a) % CTAS.length],
             thumbnail: demoCreativeThumbnail(angle.title, angle.format, ci + s + a),
             videoId: /video|reel/i.test(angle.format) ? `demo-video-${ci}-${s}-${a}` : undefined,
+            videoUrl: /video|reel/i.test(angle.format) ? "/media/demo-creative.mp4" : undefined,
           },
         });
       }

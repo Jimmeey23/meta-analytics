@@ -1,6 +1,8 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { cache as requestCache } from "react";
+import crypto from "node:crypto";
+import { ReportCache } from "./report-cache";
 import type { Account, Mode, Range, ReportData } from "./types";
 import { COOKIE_NAME, decodeSession, type Session } from "./meta";
 import { metaConfig } from "./meta";
@@ -90,8 +92,9 @@ function finalize(data: ReportData): ReportData {
   return data;
 }
 
-const reportCache = new Map<string, { at: number; data: ReportData }>();
-const TTL = 5 * 60 * 1000;
+const reportCache = new ReportCache<ReportData>({ ttlMs: 5 * 60 * 1000, staleMs: 25 * 60 * 1000, maxEntries: 24 });
+const demoCache = new ReportCache<ReportData>({ ttlMs: 5 * 60 * 1000, maxEntries: 12 });
+const scopeFor = (token: string) => crypto.createHash("sha256").update(token).digest("hex").slice(0, 20);
 
 export type ReportOptions = {
   rangeKey?: string;
@@ -109,27 +112,32 @@ export async function loadReport(opts: ReportOptions = {}): Promise<{ data: Repo
   const account = accounts.find((a) => a.id === accountId) ?? accounts[0] ?? DEMO_ACCOUNTS[0];
 
   if (!live) {
-    const data = finalize(buildDemoData(accountId, range, account.name));
-    // A signed-in user seeing sample data needs to know why.
-    if (session?.accessToken && reason) {
-      data.warnings = [`Meta account: ${reason} Showing sample data instead.`, ...(data.warnings ?? [])];
-    }
+    const key = `${accountId}:${range.since}:${range.until}`;
+    const cached = await demoCache.read(key, async () => finalize(buildDemoData(accountId, range, account.name)));
+    // Do not mutate the shared cached report when adding a session-specific warning.
+    const data = session?.accessToken && reason
+      ? { ...cached, warnings: [`Meta account: ${reason} Showing sample data instead.`, ...cached.warnings] }
+      : cached;
     return { data, accounts, session, range };
   }
 
-  const key = `${session!.userId}:${accountId}:${range.since}:${range.until}`;
-  const hit = reportCache.get(key);
-  if (hit && Date.now() - hit.at < TTL) {
-    return { data: hit.data, accounts, session, range };
-  }
-
-  const data = finalize(await buildLiveData(session!.accessToken, account, range));
-  reportCache.set(key, { at: Date.now(), data });
+  const scope = scopeFor(session!.accessToken);
+  const key = `${scope}:${accountId}:${range.since}:${range.until}`;
+  const data = await reportCache.read(key, async () => {
+    const report = finalize(await buildLiveData(session!.accessToken, account, range));
+    // buildLiveData deliberately degrades individual edges. If every core
+    // delivery edge failed, don't cache that empty report as a healthy zero.
+    if (!report.series.length && !report.campaigns.length && report.warnings.some((w) => /insights:/i.test(w))) {
+      throw new Error("Meta delivery data is temporarily unavailable. Please retry shortly.");
+    }
+    return report;
+  });
   return { data, accounts, session, range };
 }
 
-export function clearReportCache() {
-  reportCache.clear();
+export function clearReportCache(session?: Session | null) {
+  demoCache.clear();
+  reportCache.clear(session?.accessToken ? scopeFor(session.accessToken) : "");
 }
 
 export { DAY_NAMES_SHORT, DAY_NAMES_LONG };

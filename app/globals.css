@@ -98,6 +98,8 @@ body {
 }
 
 .panel {
+  min-width: 0;
+  max-width: 100%;
   background: hsl(var(--surface) / 0.72);
   border: 1px solid hsl(var(--line) / 0.9);
   backdrop-filter: blur(14px);
