@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { CreativeMedia } from "@/components/ui/creative-media";
+import { CreativeThumb } from "./creative-gallery";
 import { DrilldownProvider, useDrilldown, type Drilldown } from "./drilldown-context";
 import { Badge, Delta, Panel, Sparkline, KeyValue, ProgressBar } from "@/components/ui/primitives";
 import { compact, currency, dateTime, num, pct, rankingLabel, rankingTone, relative, shortDate } from "@/lib/format";
@@ -191,6 +192,7 @@ function MetricView({ p }: { p: any }) {
 }
 
 function EntityView({ p }: { p: any }) {
+  const { open: openChild } = useDrilldown();
   const row = p.row;
   const conv = (row.leads ?? 0) + (row.purchases ?? 0);
   const typeLabel = p.type === "campaign" ? "Campaign" : p.type === "adset" ? "Ad set" : "Ad";
@@ -268,7 +270,7 @@ function EntityView({ p }: { p: any }) {
               <tbody>
                 {p.children.slice(0, 12).map((c: any) => (
                   <tr key={c.id} className="border-t border-line/50">
-                    <td className="max-w-[260px] truncate px-3 py-2">{c.name}</td>
+                    <td className="max-w-[260px] px-3 py-2"><div className="flex items-center gap-2">{p.type === "adset" ? <CreativeThumb ad={c} code={p.code} account={p.account} className="h-9 w-9" /> : <button type="button" className="text-left hover:text-brand-500" onClick={() => openChild({ kind: "entity", payload: { row: c, type: "adset", code: p.code, account: p.account, children: (p.creatives ?? []).filter((a: any) => a.adSetId === c.id) } })}>{c.name}</button>}</div></td>
                     <td className="px-3 py-2 text-right num">{currency(c.spend, p.code, { compact: true })}</td>
                     <td className="px-3 py-2 text-right num text-muted">{compact(c.impressions)}</td>
                     <td className="px-3 py-2 text-right num">{pct(c.ctr)}</td>
@@ -289,9 +291,7 @@ function EntityView({ p }: { p: any }) {
           <div className="grid gap-2 sm:grid-cols-2">
             {p.creatives.slice(0, 8).map((a: any) => (
               <div key={a.id} className="flex items-center gap-2.5 rounded-xl border border-line/70 px-3 py-2">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500">
-                  {a.creative?.thumbnail ? <img src={a.creative.thumbnail} alt="" className="h-10 w-10 rounded-lg object-cover" /> : <MousePointerClick className="h-4 w-4" />}
-                </div>
+                <CreativeThumb ad={a} code={p.code} account={p.account} className="h-10 w-10" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[12px] font-medium">{a.creative?.title ?? a.name}</p>
                   <p className="truncate text-[10px] text-faint">{a.creative?.format ?? "Ad"} · CTR {pct(a.ctr)} · {num(a.results)} results</p>
@@ -307,7 +307,13 @@ function EntityView({ p }: { p: any }) {
 }
 
 function CreativeView({ p }: { p: any }) {
+  const { open: openChild } = useDrilldown();
+  const [expanded, setExpanded] = React.useState(false);
   const ad = p.ad;
+  const assets = ad.creative?.assets?.length ? ad.creative.assets : [];
+  const [assetIndex, setAssetIndex] = React.useState(0);
+  const asset = assets[assetIndex];
+  const isVideoAsset = asset ? Boolean(asset.videoId) : Boolean(ad.creative?.videoId || ad.creative?.videoUrl);
   const acc = p.account ?? {};
   const ctrIndex = safeDiv(ad.ctr, acc.ctr || 1) * 100;
   const cpaIndex = safeDiv(ad.costPerResult, acc.costPerResult || 1) * 100;
@@ -320,12 +326,16 @@ function CreativeView({ p }: { p: any }) {
 
   return (
     <>
+      <Modal open={expanded} onClose={() => setExpanded(false)} title={ad.creative?.title ?? ad.name} subtitle="Full creative image" size="xl">
+        <div className="h-[65vh] w-full"><CreativeMedia ad={ad} posterUrl={asset?.imageUrl ?? asset?.thumbnail} imageClassName="object-contain" priority /></div>
+      </Modal>
+      {assets.length > 1 ? <div className="mb-4 flex flex-wrap gap-2" aria-label="Creative assets">{assets.map((item: any, index: number) => <button type="button" key={index} onClick={() => setAssetIndex(index)} aria-pressed={assetIndex === index} className={cn("rounded-lg border px-3 py-1.5 text-xs", assetIndex === index ? "border-brand-500 text-brand-500" : "border-line text-muted")}>{item.videoId ? "Video" : "Image"} {index + 1}</button>)}</div> : null}
       <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
         {/* Creative mock */}
         <div className="rounded-2xl border border-line/70 bg-gradient-to-br from-brand-500/10 via-accent/5 to-transparent p-4">
           <div className="mx-auto w-full max-w-[280px] overflow-hidden rounded-2xl border border-line bg-surface shadow-soft">
-            <div className="relative aspect-square w-full bg-gradient-to-br from-brand-500/30 via-accent/25 to-accent-2/20">
-              <CreativeMedia ad={ad} playVideo controls />
+            <div className="relative aspect-[4/3] w-full bg-gradient-to-br from-brand-500/30 via-accent/25 to-accent-2/20">
+              {isVideoAsset ? <CreativeMedia key={assetIndex} ad={ad} playVideo controls videoId={asset?.videoId} posterUrl={asset?.thumbnail ?? asset?.imageUrl} /> : <button type="button" className="h-full w-full" aria-label="Expand creative image" onClick={() => setExpanded(true)}><CreativeMedia ad={ad} posterUrl={asset?.imageUrl ?? asset?.thumbnail} imageClassName="object-contain" priority /></button>}
             </div>
             <div className="space-y-1.5 p-3">
               <p className="text-[11px] font-semibold">{ad.creative?.title ?? ad.name}</p>
@@ -339,11 +349,7 @@ function CreativeView({ p }: { p: any }) {
             </div>
           </div>
           <p className="mt-3 text-center text-[10px] text-faint">
-            {ad.creative?.videoUrl
-              ? "Live video creative"
-              : ad.creative?.thumbnail
-                ? "Live creative preview"
-                : "Preview rendered from the ad's copy (image thumbnail not returned by the API)"}
+            {isVideoAsset ? "Video loads only when opened. Demo videos are explicitly labelled sample motion assets." : "Click the image to expand. Missing media may require additional Meta permissions."}
           </p>
           {ad.creative?.permalink ? (
             <p className="mt-1 text-center text-[10px]">
@@ -397,6 +403,7 @@ function CreativeView({ p }: { p: any }) {
           <div className="grid gap-2 sm:grid-cols-2">
             {p.siblings.slice(0, 6).map((s: any) => (
               <div key={s.id} className="flex items-center gap-2.5 rounded-xl border border-line/70 px-3 py-2">
+                <CreativeThumb ad={s} code={p.code} account={p.account} className="h-10 w-10" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[12px]">{s.creative?.title ?? s.name}</p>
                   <p className="text-[10px] text-faint num">CTR {pct(s.ctr)} · CPA {currency(s.costPerResult, p.code, { compact: true })}</p>
@@ -467,6 +474,7 @@ function SegmentView({ p }: { p: any }) {
 }
 
 function LeadView({ p }: { p: any }) {
+  const { open: openChild } = useDrilldown();
   const l = p.lead;
   return (
     <>
@@ -481,6 +489,7 @@ function LeadView({ p }: { p: any }) {
         <Badge tone={l.intent === "Hot" ? "pos" : l.intent === "Warm" ? "warn" : "neutral"}>{l.intent} intent</Badge>
       </div>
 
+      {p.ad ? <div className="mt-4 flex items-center gap-3 rounded-xl border border-line p-3"><CreativeThumb ad={p.ad} code={p.code} account={p.account} /><div className="min-w-0 flex-1"><p className="text-xs font-semibold">Source creative</p><p className="truncate text-[11px] text-muted">{p.ad.creative?.title ?? p.ad.name}</p></div><button type="button" className="text-xs font-semibold text-brand-500" onClick={() => openChild({ kind: "creative", payload: { ad: p.ad, code: p.code, account: p.account } })}>View creative →</button></div> : null}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-line/70 p-3">
           <SectionTitle>Contact</SectionTitle>
@@ -660,7 +669,7 @@ function InsightView({ p }: { p: any }) {
             <p className="num text-base font-semibold">{i.metric.value}</p>
           </div>
           <div className="rounded-xl border border-line/70 bg-ink/[0.02] px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-faint">Expected impact</p>
+            <p className="text-[10px] uppercase tracking-wide text-faint">Impact hypothesis</p>
             <p className="text-base font-semibold">{i.impact}</p>
           </div>
         </div>

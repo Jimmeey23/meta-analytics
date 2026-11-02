@@ -104,7 +104,7 @@ export default async function AudiencePage({
           </div>
         </Panel>
         <Panel className="lg:col-span-2">
-          <PanelHeader title="Results by day & hour" subtitle="Use this to build ad schedules and bid rules" icon={<Timer className="h-4 w-4" />} />
+          <PanelHeader title="Conversions by day & hour" subtitle="Observed advertiser-timezone windows; validate with a controlled schedule test" icon={<Timer className="h-4 w-4" />} />
           <div className="px-5 pb-5 pt-4">
             {data.hourly.length ? (
               <Heatmap cells={data.hourly} days={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]} code={code} />

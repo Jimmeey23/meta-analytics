@@ -156,7 +156,7 @@ export default async function DashboardPage({
       <BudgetPacing data={data} />
 
       {/* Campaigns */}
-      <CampaignExplorer campaigns={data.campaigns} adSets={data.adSets} ads={data.ads} code={code} />
+      <CampaignExplorer campaigns={data.campaigns} adSets={data.adSets} ads={data.ads} code={code} account={data.kpis} />
 
       {/* Audience snapshot */}
       <section className="grid gap-4 lg:grid-cols-3">
@@ -245,7 +245,7 @@ export default async function DashboardPage({
         </Panel>
         <Panel>
           <PanelHeader title="Top creatives" subtitle="Best performing ads" icon={<Sparkles className="h-4 w-4" />} />
-          <TopCreatives ads={data.ads} code={code} limit={5} />
+          <TopCreatives ads={data.ads} code={code} limit={5} account={data.kpis} />
         </Panel>
       </section>
 

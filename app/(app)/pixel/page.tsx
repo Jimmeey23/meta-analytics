@@ -91,7 +91,7 @@ export default async function PixelPage({
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">
-            <div className="space-y-4 lg:col-span-2">
+            <div className="min-w-0 space-y-4 lg:col-span-2">
               <PixelOverview pixel={pixel} code={code} />
             </div>
 

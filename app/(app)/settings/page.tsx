@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { getSession, resolveAccounts } from "@/lib/data";
 import { graphUsage, metaConfig, rateLimitCooldownMs, SCOPES } from "@/lib/meta";
+import { aiConfig } from "@/lib/ai";
 import { Badge, Callout, Panel, PanelHeader } from "@/components/ui/primitives";
 import { CopyButton } from "@/components/panels/copy-button";
 import { relative } from "@/lib/format";
@@ -24,6 +25,7 @@ export default async function SettingsPage({
   const sp = await searchParams;
   const session = await getSession();
   const config = metaConfig();
+  const ai = aiConfig();
   const { live, reason, accounts } = await resolveAccounts(session);
   const demo = !live;
   const usage = graphUsage();
@@ -242,12 +244,21 @@ export default async function SettingsPage({
         </div>
       </Panel>
 
+      <Panel>
+        <PanelHeader title="AI analyst" subtitle="Optional, consent-based synthesis of aggregate report evidence" icon={<Gauge className="h-4 w-4" />} right={<Badge tone={ai.configured ? "pos" : "neutral"}>{ai.configured ? "Configured" : "Not configured"}</Badge>} />
+        <div className="space-y-2 px-5 pb-5 pt-4 text-xs text-muted">
+          <p>Model: <strong className="text-ink">{ai.model}</strong>. Set AI_API_KEY in the server environment to enable generation; AI_MODEL and AI_BASE_URL are optional. Never expose keys as NEXT_PUBLIC variables.</p>
+          <p>Generation is on demand, rate-limited and cached for 10 minutes. Only whitelisted aggregate metrics, entity names and evidence references are sent. Lead contacts, form answers, tokens and media URLs are excluded.</p>
+          <p>Demo AI calls: <strong className="text-ink">{ai.allowDemo ? "explicitly enabled" : "disabled"}</strong>. Evidence-backed analysis remains available without a provider.</p>
+        </div>
+      </Panel>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel>
           <PanelHeader title="Data handling" subtitle="What is stored and how long" icon={<Database className="h-4 w-4" />} />
           <ul className="space-y-2 px-5 pb-5 pt-4 text-[12px] text-muted">
             <li className="flex gap-2"><span className="text-brand-500">•</span> Your access token is held in an httpOnly, signed cookie on this server. It is never sent to third parties.</li>
-            <li className="flex gap-2"><span className="text-brand-500">•</span> Report responses are cached in server memory for five minutes to stay inside Meta rate limits.</li>
+            <li className="flex gap-2"><span className="text-brand-500">•</span> Report responses are cached in this server process for five minutes, with bounded stale fallback and shared in-flight requests. Multi-instance deployments need a shared cache for the same behavior.</li>
             <li className="flex gap-2"><span className="text-brand-500">•</span> No ad data is written to disk. Disconnecting clears the session and the cache immediately.</li>
             <li className="flex gap-2"><span className="text-brand-500">•</span> Set FORCE_DEMO=1 in .env.local to keep the app on sample data even while connected.</li>
           </ul>

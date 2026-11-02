@@ -102,7 +102,9 @@ export type AdRow = CampaignRow & {
   adSetName: string;
   creative?: {
     id?: string; title?: string; body?: string; thumbnail?: string; imageUrl?: string;
-    videoUrl?: string; permalink?: string; videoId?: string; cta?: string; format?: string;
+    videoUrl?: string; permalink?: string; videoId?: string; videoIds?: string[];
+    imageHash?: string; cta?: string; format?: string;
+    assets?: { imageUrl?: string; thumbnail?: string; videoId?: string; permalink?: string; title?: string; body?: string }[];
   } | null;
 };
 

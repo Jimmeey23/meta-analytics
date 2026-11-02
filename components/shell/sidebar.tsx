@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   Activity, BarChart3, ChevronRight, Facebook, LayoutDashboard, Megaphone, Settings,
   Sparkles, Target, UserPlus, X, Zap,
@@ -23,6 +23,8 @@ export function Sidebar({
   mode, userName, userPicture, onClose,
 }: { mode: "live" | "demo"; userName: string; userPicture?: string; onClose?: () => void }) {
   const pathname = usePathname();
+  const params = useSearchParams();
+  const query = params.toString();
   return (
     <div className="flex h-full w-[268px] flex-col border-r border-line bg-surface/50 backdrop-blur-xl">
       <div className="flex items-center gap-2.5 px-5 py-5">
@@ -46,7 +48,8 @@ export function Sidebar({
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={{ pathname: item.href, search: query }}
+              prefetch={true}
               onClick={onClose}
               className={cn(
                 "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all",

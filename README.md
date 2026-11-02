@@ -19,8 +19,40 @@ Built with **Next.js 15 (App Router) · React 19 · Tailwind CSS · Recharts · 
 | **Audience** | Age × gender stacked spend, platform & device donuts, placement and region breakdowns, best/worst segments, day × hour heat map for ad scheduling, weekday efficiency |
 | **Leads** | Every instant-form and pixel lead with contact details, source campaign/ad, intent scoring, per-form analytics, capture funnel, leads by campaign/city/hour, CSV export |
 | **Pixel & events** | Pixel ID, last-fire time, event volumes with 14-day trends and match quality, step-to-step conversion rates, automated diagnostics, copyable base code, setup guide |
-| **Insights** | Rule-based recommendations (creative fatigue, budget reallocation, scaling, CPM pressure, dayparting, audience saturation, lead quality, pixel health, tracking gaps) with expected impact and a concrete action for each |
-| **Global** | Dark/light/system themes, date-range presets + custom ranges, multi-account switcher, CSV export of the entire report, print/PDF-ready layout, server-side API caching, skeleton loading states and error boundaries |
+| **Insights** | Evidence-backed momentum, robust spend anomalies, spend concentration, comparable-objective budget tests, creative fatigue and funnel/lead-quality diagnostics; optional consent-based AI synthesis with validated evidence citations |
+| **Global** | Dark/light/system themes, date-range presets + custom ranges, multi-account switcher, CSV export of the entire report, print/PDF-ready layout, bounded server-side caching with shared requests, lazy video sources, keyboard-accessible creative previews, skeleton loading states and error boundaries |
+
+### Faster reporting and creative previews
+
+- Account/date-scoped report cache: 5-minute fresh TTL, bounded LRU storage, shared in-flight requests and stale fallback on upstream failures. Demo reports are cached too.
+- Graph reads follow pagination, use a four-request concurrency cap and have a 15-second timeout. Pixel, poster and image-hash lookups run in parallel; lead-form reads are bounded and parallel rather than a serial waterfall.
+- Navigation preserves the selected account and date range and opts into route prefetching. Refresh explicitly invalidates the current session's cache before reloading.
+- One shared media renderer covers campaign/ad tables, top creatives, the campaign and advanced-analytics libraries, drill-downs, sibling ads and lead attribution. Image-hash assets, carousel cards and video posters are supported. The gallery pages through all returned creatives.
+- Video files resolve only when opened, through an account-authorized endpoint. Posters load lazily; images can be expanded; dialogs support Escape, focus trapping and focus restoration. Missing or expired media has a retry/fallback state.
+- Demo mode includes a small local motion-preview MP4, clearly labelled as a demo rather than a real ad.
+
+Caches are **per server process**. Use a shared cache/store and distributed rate limiting before scaling to multiple instances. Meta permissions and source availability still determine whether a particular live creative can be displayed.
+
+### Decision intelligence and optional AI
+
+`lib/analytics.ts` computes directional findings from the loaded report: equal-length complete-day momentum, median/MAD spend anomalies, top-three spend concentration and HHI, budget comparisons within the same objective, same-objective creative fatigue, funnel loss and captured-lead contact coverage. Findings include evidence references, sample-volume confidence labels and controlled experiment guardrails. These are observational hypotheses, not causal estimates or guaranteed savings.
+
+The existing rule-based recommendations and executive summary remain available and are labelled separately from AI.
+
+To enable model-written synthesis, set these **server-only** variables and restart:
+
+```env
+AI_API_KEY=your-provider-key
+AI_MODEL=gpt-4.1-mini
+AI_BASE_URL=https://api.openai.com/v1
+AI_ALLOW_DEMO=0
+```
+
+The integration uses an OpenAI-compatible `POST /chat/completions` endpoint with structured JSON output. `AI_BASE_URL` must be HTTPS. Another provider can be used if it supports that contract. No key is included in the browser bundle.
+
+Open **Insights → AI analyst brief**, review the disclosure, check consent and generate. Only whitelisted aggregate metrics, entity names, computed findings and evidence references are sent; lead contacts, form answers, tokens and media URLs are excluded. The server reloads the report under the current session rather than trusting a client-supplied report. Responses are validated against known evidence IDs, cached for 10 minutes and limited to five generations per identity per 10 minutes per process. Live accounts are required unless `AI_ALLOW_DEMO=1` explicitly enables billable demo calls.
+
+Without a provider key, the deeper deterministic analysis still works. AI output is advisory: verify its cited evidence and CRM outcomes before acting. The app never changes campaigns or budgets.
 
 ### Executive summary
 
@@ -65,6 +97,13 @@ Production:
 ```bash
 npm run build
 npm start
+```
+
+Validation:
+
+```bash
+npm run typecheck
+npm run check       # creative mapping, Graph call budget, throttling, cache/analytics/AI boundaries
 ```
 
 ---
@@ -124,7 +163,10 @@ lib/
   live.ts                      Builds a full report from the Marketing API (parallel, fault-tolerant)
   demo.ts                      Deterministic sample-data engine
   metrics.ts                   Action-type → metric mapping, KPI derivation, breakdown parsing
-  insights.ts                  15 recommendation rules + health score
+  insights.ts                  15 deterministic recommendation rules + health score
+  analytics.ts                 Evidence-backed comparative analysis and experiment design
+  ai.ts                        Optional server-only AI provider, validation and rate limiting
+  report-cache.ts              Bounded single-flight cache with stale fallback
   data.ts                      Orchestration, 5-minute cache, session/account resolution
   ranges.ts                    Date-range presets and previous-period maths
 ```
@@ -137,15 +179,14 @@ lib/
   short-lived cookie. `/api/meta/callback` verifies `state`, exchanges the code, upgrades to a long-lived
   token, and stores `{ token, user, expiry }` in an HMAC-signed **httpOnly** cookie.
 - **Data** — `loadReport()` resolves the session, account and date range, then either builds a live report
-  (≈16 parallel Graph API calls, each individually fault-tolerant — a failure degrades to a warning rather
-  than breaking the page) or a deterministic demo report. Live responses are cached in memory for 5 minutes
-  to stay well inside Meta's rate limits.
+  (bounded parallel Graph API reads, each individually fault-tolerant — a failure degrades to a warning rather
+  than breaking the page) or a deterministic demo report. Live responses are cached in process memory for 5 minutes
+  with shared in-flight reads and bounded stale fallback. Video source files are resolved only on demand.
 - **Metrics** — Meta returns generic `actions[]` arrays, so `lib/metrics.ts` maps action types to
   objective-aware results (`onsite_conversion.lead_grouped` → Leads, `purchase` → Purchases,
   `link_click` → Link clicks …) and derives CTR, CPC, CPM, frequency, ROAS and cost per result consistently
   across every surface.
-- **Insights** — `lib/insights.ts` runs 15 deterministic rules over the loaded report. Each rule emits a
-  severity, an explanation, an expected impact and one concrete action.
+- **Insights** — `lib/insights.ts` retains 15 deterministic heuristics. `lib/analytics.ts` adds evidence-backed comparisons and experiment guardrails; `lib/ai.ts` optionally synthesizes that evidence through a configured model. Impact claims are hypotheses, not guarantees.
 
 ---
 

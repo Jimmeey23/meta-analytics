@@ -60,7 +60,7 @@ export function InsightCard({ insight, drillable = true }: { insight: Insight; d
               </div>
             ) : null}
             <div className="rounded-xl border border-line/70 bg-ink/[0.02] px-3 py-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-faint">Expected impact</p>
+              <p className="text-[10px] uppercase tracking-wide text-faint">Impact hypothesis</p>
               <p className="text-[13px] font-semibold">{insight.impact}</p>
             </div>
           </div>

@@ -4,7 +4,7 @@ import { loadReport } from "@/lib/data";
 import { Panel, PanelHeader, Sparkline, EmptyState } from "@/components/ui/primitives";
 import { MiniStatRow } from "@/components/panels/kpi-grid";
 import { CampaignExplorer, TopCreatives } from "@/components/panels/campaign-explorer";
-import { CreativeGallery } from "@/components/panels/creative-gallery";
+import { CreativeGallery, CreativeThumb } from "@/components/panels/creative-gallery";
 import { OpenDrilldown } from "@/components/panels/drilldown-context";
 import { BubbleScatter, TrendChart } from "@/components/charts";
 import { currency, num, objectiveLabel, pct, rankingLabel, rankingTone } from "@/lib/format";
@@ -100,14 +100,7 @@ function AdTable({ rows, code, ads, account }: { rows: AdRow[]; code: string; ad
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2.5">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-500/25 to-accent/20 text-brand-500">
-                    {r.creative?.thumbnail ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={r.creative.thumbnail} alt="" className="h-10 w-10 object-cover" />
-                    ) : (
-                      <ImageIcon className="h-4 w-4" />
-                    )}
-                  </div>
+                  <CreativeThumb ad={r} code={code} account={account} interactive={false} className="h-10 w-10" />
                   <div className="min-w-0">
                     <p className="max-w-[260px] truncate text-[12px] font-medium">{r.creative?.title ?? r.name}</p>
                     <p className="max-w-[260px] truncate text-[10px] text-faint">
@@ -160,7 +153,7 @@ export default async function CampaignsPage({
         ]}
       />
 
-      <CampaignExplorer campaigns={data.campaigns} adSets={data.adSets} ads={data.ads} code={code} />
+      <CampaignExplorer campaigns={data.campaigns} adSets={data.adSets} ads={data.ads} code={code} account={data.kpis} />
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel className="xl:col-span-2">
@@ -194,7 +187,7 @@ export default async function CampaignsPage({
       <Panel>
         <PanelHeader
           title="Creative library"
-          subtitle="Hover a creative to expand its metrics · click to open the full analysis"
+          subtitle="Tap or click any creative for full analysis and video playback"
           icon={<ImageIcon className="h-4 w-4" />}
         />
         <CreativeGallery ads={data.ads} code={code} account={data.kpis} limit={12} />

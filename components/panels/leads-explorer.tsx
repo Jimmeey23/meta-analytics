@@ -5,9 +5,13 @@ import { Avatar, Badge, EmptyState, Panel, PanelHeader } from "@/components/ui/p
 import { dateTime, relative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDrilldown } from "./drilldown-context";
-import type { Lead } from "@/lib/types";
+import type { AdRow, Kpis, Lead } from "@/lib/types";
+import { CreativeThumb } from "./creative-gallery";
 
-export function LeadsExplorer({ leads, forms }: { leads: Lead[]; forms: { id: string; name: string }[] }) {
+export function LeadsExplorer({ leads, forms, ads = [], code = "INR", account }: { leads: Lead[]; forms: { id: string; name: string }[]; ads?: AdRow[]; code?: string; account?: Kpis }) {
+  const adById = React.useMemo(() => new Map(ads.map((ad) => [ad.id, ad])), [ads]);
+  const sourceAd = (lead: Lead) => lead.adId ? adById.get(lead.adId) : ads.find((ad) => ad.name === lead.adName);
+  const openLead = (lead: Lead) => open({ kind: "lead", payload: { lead, ad: sourceAd(lead), code, account } });
   const [query, setQuery] = React.useState("");
   const [form, setForm] = React.useState("ALL");
   const [intent, setIntent] = React.useState("ALL");
@@ -107,7 +111,7 @@ export function LeadsExplorer({ leads, forms }: { leads: Lead[]; forms: { id: st
                   role="button"
                   aria-haspopup="dialog"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open({ kind: "lead", payload: { lead: l } }); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLead(l); } }}
                   onClick={() => open({ kind: "lead", payload: { lead: l } })}
                   className="cursor-pointer border-t border-line/60 transition hover:bg-ink/[0.02]"
                   title="Open lead detail"
@@ -129,8 +133,8 @@ export function LeadsExplorer({ leads, forms }: { leads: Lead[]; forms: { id: st
                   </td>
                   <td className="px-3 py-2.5 text-[12px] text-muted">{l.city}</td>
                   <td className="px-3 py-2.5">
-                    <p className="max-w-[220px] truncate text-[11px]" title={l.campaignName}>{l.campaignName ?? "—"}</p>
-                    <p className="max-w-[220px] truncate text-[10px] text-faint" title={l.adName}>{l.adName ?? l.platform}</p>
+                    <div className="flex items-center gap-2">{sourceAd(l) ? <CreativeThumb ad={sourceAd(l)!} code={code} account={account} interactive={false} className="h-9 w-9" /> : null}<div className="min-w-0"><p className="max-w-[220px] truncate text-[11px]" title={l.campaignName}>{l.campaignName ?? "—"}</p>
+                    <p className="max-w-[220px] truncate text-[10px] text-faint" title={l.adName}>{l.adName ?? l.platform}</p></div></div>
                   </td>
                   <td className="px-3 py-2.5 text-[11px] text-muted">{l.formName}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-[11px] text-muted" title={dateTime(l.createdTime)}>{relative(l.createdTime)}</td>

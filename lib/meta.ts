@@ -1,6 +1,8 @@
 import "server-only";
 import crypto from "node:crypto";
 
+export type PagedRows = any[] & { truncated?: boolean; hasMore?: boolean };
+
 export const SCOPES = [
   "ads_read",
   "business_management",
@@ -106,7 +108,8 @@ async function rawRequest(path: string, params: Record<string, unknown>, token?:
   const headers: Record<string, string> = { Accept: "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(url, { headers, cache: "no-store" });
+  // Never let one unresponsive Graph edge hold a page open indefinitely.
+  const res = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
   recordUsage(res.headers);
   let json: any = null;
   try {
@@ -315,6 +318,24 @@ export async function getManyByIds(
   return out;
 }
 
+/** Resolve durable image URLs from hashes in batches (not one request per ad). */
+export async function getAdImages(token: string, accountId: string, hashes: string[]): Promise<Map<string, any>> {
+  const out = new Map<string, any>();
+  const unique = [...new Set(hashes.filter(Boolean))];
+  for (let i = 0; i < unique.length; i += 50) {
+    try {
+      const json = await request(`${accountId}/adimages`, {
+        hashes: unique.slice(i, i + 50), fields: "hash,url,permalink_url", limit: 50,
+      }, token);
+      for (const node of json?.data ?? []) if (node.hash) out.set(String(node.hash), node);
+    } catch {
+      if (rateLimitCooldownMs() > 0) break;
+      // The creative's direct URL remains a usable fallback.
+    }
+  }
+  return out;
+}
+
 export async function exchangeCode(code: string) {
   const { appId, appSecret, redirectUri } = metaConfig();
   const short = await request(
@@ -364,8 +385,12 @@ export async function getInsights(
   accountId: string,
   params: Record<string, unknown>,
 ) {
-  const json = await request(`${accountId}/insights`, params, token);
-  return (json?.data ?? []) as any[];
+  // `limit` is a page size, not a total row limit. Follow cursors so large
+  // accounts do not silently lose campaigns, ads or days after the first page.
+  const pageSize = Math.min(Number(params.limit) || 100, 500);
+  return getEdgePaged(token, accountId, "insights", { ...params, limit: pageSize }, {
+    limit: pageSize, max: pageSize * 4, maxPages: 8,
+  });
 }
 
 export async function getEdge(token: string, parent: string, edge: string, params: Record<string, unknown>) {
@@ -419,7 +444,7 @@ export async function getEdgePaged(
 ) {
   const { minLimit = 5, max = 2000, maxPages = 25 } = opts;
   let limit = opts.limit ?? 50;
-  const rows: any[] = [];
+  const rows: PagedRows = [];
   let after: string | undefined;
 
   for (let page = 0; page < maxPages && rows.length < max; page++) {
@@ -432,15 +457,18 @@ export async function getEdgePaged(
         page--; // retry this same page with a smaller window
         continue;
       }
-      // Partial data beats none: surface what we already have.
-      if (rows.length) return rows.slice(0, max);
+      // Partial data beats none, but callers must be able to disclose it.
+      if (rows.length) { const partial: PagedRows = rows.slice(0, max); partial.truncated = true; return partial; }
       throw err;
     }
     rows.push(...((json?.data ?? []) as any[]));
     after = json?.paging?.cursors?.after;
     if (!json?.paging?.next || !after) break;
+    if (page === maxPages - 1 || rows.length >= max) rows.hasMore = true;
   }
-  return rows.slice(0, max);
+  const result: PagedRows = rows.slice(0, max);
+  if (rows.truncated || rows.hasMore) result.truncated = true;
+  return result;
 }
 
 export { request as graphRequest };
