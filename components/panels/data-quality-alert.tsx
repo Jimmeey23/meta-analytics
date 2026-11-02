@@ -9,7 +9,9 @@ function stepsFor(warning: string) {
   if (value.startsWith("meta account:"))
     return ["Open Settings to see the exact response Meta returned for this user.", "In Meta Business Settings → Accounts → Ad accounts, confirm the signed-in user has access to at least one ad account.", "Reconnect MetaInsight so the new asset permissions are picked up."];
   if (value.startsWith("pages:") || value.startsWith("lead forms")) return ["Open Meta Business Settings → Integrations → Leads Access.", "Select the affected Page and assign the signed-in user or system user.", "Reconnect MetaInsight so the new Page permissions are included."];
-  if (value.startsWith("ad metadata:")) return ["Reduce the selected date range to 7 or 30 days.", "Confirm the user has ads_read access to the selected ad account.", "Retry after Meta rate limits recover; performance data remains available while creative metadata is unavailable."];
+  if (value.startsWith("lead capture:")) return ["Refresh after the shown Meta cooldown; completed form lead lists are cached so the sync can resume.", "If a form list is still truncated, narrow the date range or use Meta's lead export for a complete audit.", "Confirm the signed-in user has Leads Access for every affected Page in Meta Business Settings."];
+  if (value.startsWith("ad metadata:") || value.startsWith("ad set metadata:") || value.startsWith("campaign metadata:") || value.startsWith("creative metadata:")) return ["Confirm the signed-in user has ads_read access to the selected ad account and its assets.", "Retry after any Meta rate-limit cooldown; metadata is now batch-fetched for the exact ads/ad sets in the report.", "If specific records are still missing, check whether they were deleted or restricted in Meta Business Settings."];
+  if (value.startsWith("pixels:")) return ["Wait for the Meta cooldown to pass, then refresh; pixel diagnostics are deferred instead of spending calls during a limit.", "Open Events Manager and select the pixel shown in MetaInsight.", "Use Test Events to reproduce the affected event and verify the integration."];
   if (value.startsWith("pixel") || value.includes("event")) return ["Open Events Manager and select the pixel shown in MetaInsight.", "Use Test Events to reproduce the affected event.", "Correct the parameter named in Meta’s error, publish the integration, and retest."];
   return ["Confirm the selected account and date range in the top bar.", "Refresh once after Meta finishes processing recent data.", "If it persists, verify the signed-in user’s asset permissions in Meta Business Settings."];
 }
@@ -18,7 +20,7 @@ export function DataQualityAlert({ warnings }: { warnings: string[] }) {
   if (!warnings.length) return null;
   return <section className="rounded-2xl border border-warn/30 bg-warn/5 p-4" aria-labelledby="data-quality-title">
     <div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" /><div className="min-w-0 flex-1"><h2 id="data-quality-title" className="text-sm font-semibold">Data discrepancies found</h2><p className="mt-1 text-xs text-muted">Each issue below identifies the failing dataset, Meta’s exact response, and the recovery path.</p></div></div>
-    <div className="mt-3 grid gap-2 lg:grid-cols-2">{warnings.slice(0, 6).map((warning) => {
+    <div className="mt-3 grid gap-2 lg:grid-cols-2">{warnings.map((warning) => {
       const split = warning.indexOf(":");
       const source = split > 0 ? warning.slice(0, split) : "Meta API";
       const message = split > 0 ? warning.slice(split + 1).trim() : warning;
